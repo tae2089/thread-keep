@@ -88,7 +88,7 @@ def outer():
 		"run":                  "function",
 		"start_window":         "function",
 	}
-	if got.Indexer.ID != "thread-keep-index-python" || got.Language != "python" || len(got.Entities) != len(want) {
+	if got.Indexer.ID != "thread-keep-index-python" || got.Indexer.Version != "dev" || got.Language != "python" || len(got.Entities) != len(want) {
 		t.Fatalf("response = %#v, want Python entities %#v", got, want)
 	}
 	for _, entity := range got.Entities {

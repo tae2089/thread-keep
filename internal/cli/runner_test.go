@@ -391,6 +391,44 @@ func TestRunnerRequiresDetectedFlagForIndexerInstall(t *testing.T) {
 	assertJSONError(t, code, 2, stdout.String(), stderr.String(), "validation")
 }
 
+func TestRunnerRequiresDetectedFlagForIndexerSync(t *testing.T) {
+	repo := newGitRepo(t)
+	var stdout, stderr bytes.Buffer
+	code := execute(repo, []string{"--json", "indexers", "sync"}, &stdout, &stderr)
+	assertJSONError(t, code, 2, stdout.String(), stderr.String(), "validation")
+}
+
+func TestRunnerIndexerSyncDoesNothingWithoutDetectedExternalLanguages(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("HOME", configDir)
+	t.Setenv("XDG_CONFIG_HOME", configDir)
+	repo := newGitRepo(t)
+	writeFile(t, filepath.Join(repo, "main.go"), "package main\nfunc main() {}\n")
+	git(t, repo, "add", "main.go")
+	git(t, repo, "commit", "-m", "add Go source")
+	output := runJSONCLI(t, repo, "indexers", "sync", "--detected", "--version", "1.2.3")
+	if !strings.Contains(output, `"state":"builtin"`) || !strings.Contains(output, `"language":"typescript"`) {
+		t.Fatalf("Go-only sync output = %s", output)
+	}
+	resolvedConfigDir, err := os.UserConfigDir()
+	if err != nil {
+		t.Fatalf("UserConfigDir() error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(resolvedConfigDir, "thread-keep", "packs")); !os.IsNotExist(err) {
+		t.Fatalf("Go-only sync created pack storage: %v", err)
+	}
+}
+
+func TestRunnerRejectsInvalidIndexerSyncVersion(t *testing.T) {
+	repo := newGitRepo(t)
+	writeFile(t, filepath.Join(repo, "app.ts"), "export function run() {}\n")
+	git(t, repo, "add", "app.ts")
+	git(t, repo, "commit", "-m", "add TypeScript source")
+	var stdout, stderr bytes.Buffer
+	code := execute(repo, []string{"--json", "indexers", "sync", "--detected", "--version", "v1.2.3"}, &stdout, &stderr)
+	assertJSONError(t, code, 2, stdout.String(), stderr.String(), "validation")
+}
+
 func TestRunnerRebuildRestoresDeletedProjection(t *testing.T) {
 	repo := newGitRepo(t)
 	writeFile(t, filepath.Join(repo, "example.go"), "package example\nfunc Run() {}\n")

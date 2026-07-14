@@ -33,6 +33,11 @@ jobs:
           node-version: "24"
           package-manager-cache: false
 
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
       - name: Validate release tag and repository
         shell: bash
         run: |
@@ -165,6 +170,11 @@ jobs:
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
 
+      - name: Set up Python for wheel assembly
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
       - name: Download native assets
         uses: actions/download-artifact@v4
         with:
@@ -189,6 +199,26 @@ jobs:
           --repository=${{ github.repository }}
           --tag=${{ github.ref_name }}
           --version=${{ steps.release.outputs.version }}
+
+      - name: Assemble platform wheels from GoReleaser artifacts
+        run: >-
+          python3 scripts/release/build_wheels.py
+          --artifacts=release-staging
+          --config=scripts/release/release-config.json
+          --license=LICENSE
+          --out=release/wheels
+          --repository=${{ github.repository }}
+          --template=pypi/thread_keep
+          --version=${{ steps.release.outputs.version }}
+
+      - name: Validate wheel archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(find release/wheels -maxdepth 1 -name '*.whl' -type f | wc -l | tr -d ' ')" = "5"
+          for wheel in release/wheels/*.whl; do
+            python3 -m zipfile -t "$wheel"
+          done
 
       - name: Validate signing key pair and sign pack manifest
         shell: bash
@@ -270,6 +300,56 @@ jobs:
             publish_or_verify "$package_dir"
           done
           publish_or_verify release/npm/thread-keep
+
+      - name: Upload PyPI wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: pypi-wheels
+          path: release/wheels/*.whl
+          if-no-files-found: error
+          retention-days: 1
+
+  pypi:
+    needs: publish
+    runs-on: ubuntu-24.04
+    environment:
+      name: pypi
+      url: https://pypi.org/p/thread-keep
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js for integrity preflight
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Download PyPI wheels
+        uses: actions/download-artifact@v4
+        with:
+          name: pypi-wheels
+          path: release/wheels
+
+      - name: Verify any existing PyPI wheel integrity
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          node scripts/release/verify-pypi.mjs \
+            --distribution=thread-keep \
+            --version="$version" \
+            --wheels=release/wheels
+
+      - name: Publish platform wheels to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: release/wheels/
+          skip-existing: true
+          print-hash: true
 
   containers:
     needs: publish

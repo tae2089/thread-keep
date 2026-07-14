@@ -23,6 +23,8 @@ const protocolVersion = 1
 
 const maxRequestBytes = 2 << 20
 
+var indexerVersion = "dev"
+
 type request struct {
 	ProtocolVersion int      `json:"protocol_version"`
 	RepositoryRoot  string   `json:"repository_root"`
@@ -94,7 +96,7 @@ func run(ctx context.Context, arguments []string, input io.Reader, output io.Wri
 	if err != nil {
 		return err
 	}
-	return json.NewEncoder(output).Encode(response{ProtocolVersion: protocolVersion, Indexer: identity{ID: "thread-keep-index-kotlin", Version: "1"}, Language: "kotlin", Entities: entities, Diagnostics: diagnostics})
+	return json.NewEncoder(output).Encode(response{ProtocolVersion: protocolVersion, Indexer: identity{ID: "thread-keep-index-kotlin", Version: indexerVersion}, Language: "kotlin", Entities: entities, Diagnostics: diagnostics})
 }
 
 func index(ctx context.Context, input request) ([]entity, []string, error) {

@@ -22,6 +22,8 @@ const protocolVersion = 1
 
 const maxRequestBytes = 2 << 20
 
+var indexerVersion = "dev"
+
 type request struct {
 	ProtocolVersion int      `json:"protocol_version"`
 	RepositoryRoot  string   `json:"repository_root"`
@@ -88,7 +90,7 @@ func run(ctx context.Context, arguments []string, input io.Reader, output io.Wri
 	if err != nil {
 		return err
 	}
-	return json.NewEncoder(output).Encode(response{ProtocolVersion: protocolVersion, Indexer: identity{ID: "thread-keep-index-typescript", Version: "1"}, Language: "typescript", Entities: entities, Diagnostics: diagnostics})
+	return json.NewEncoder(output).Encode(response{ProtocolVersion: protocolVersion, Indexer: identity{ID: "thread-keep-index-typescript", Version: indexerVersion}, Language: "typescript", Entities: entities, Diagnostics: diagnostics})
 }
 
 func index(ctx context.Context, input request) ([]entity, []string, error) {

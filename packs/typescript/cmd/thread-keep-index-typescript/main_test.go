@@ -27,7 +27,7 @@ func TestRunExtractsTypeScriptEntities(t *testing.T) {
 	if err := json.Unmarshal(output.Bytes(), &got); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if got.Indexer.ID != "thread-keep-index-typescript" || len(got.Entities) != 4 {
+	if got.Indexer.ID != "thread-keep-index-typescript" || got.Indexer.Version != "dev" || len(got.Entities) != 4 {
 		t.Fatalf("response = %#v, want interface, class, method and function", got)
 	}
 }

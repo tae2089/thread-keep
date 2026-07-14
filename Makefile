@@ -45,6 +45,7 @@ release-build:
 release-test:
 	npm test --prefix npm/thread-keep
 	node --test scripts/release/*.test.mjs
+	python3 -m unittest scripts/release/test_build_wheels.py scripts/release/test_pypi_launcher.py
 
 fmt:
 	gofmt -w cmd internal

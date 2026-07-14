@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -24,9 +23,15 @@ const (
 	maxPackStderr = 64 << 10
 )
 
+const (
+	bundledPackDirectoryEnv = "THREAD_KEEP_BUNDLED_PACK_DIR"
+	bundledPackVersionEnv   = "THREAD_KEEP_BUNDLED_PACK_VERSION"
+)
+
 type ProcessIndexer struct {
-	language Language
-	path     string
+	language   Language
+	path       string
+	descriptor Descriptor
 }
 
 type boundedBuffer struct {
@@ -73,14 +78,16 @@ func List(ctx context.Context, root string) ([]domain.IndexerStatus, error) {
 	}
 	statuses := []domain.IndexerStatus{{Language: string(Go), PackID: GoIndexer{}.Descriptor().ID, State: domain.IndexerBuiltin, Detected: detected[Go]}}
 	for _, language := range externalPackLanguages {
-		path, found, err := installedPackPath(language)
+		pack, found, err := findInstalledPack(language)
 		if err != nil {
 			return nil, err
 		}
 		status := domain.IndexerStatus{Language: string(language), PackID: packID(language), State: domain.IndexerMissing, Detected: detected[language]}
 		if found {
 			status.State = domain.IndexerInstalled
-			status.Path = path
+			status.Path = pack.Path
+			status.Version = pack.Descriptor.Version
+			status.SHA256 = pack.SHA256
 		}
 		statuses = append(statuses, status)
 	}
@@ -88,30 +95,27 @@ func List(ctx context.Context, root string) ([]domain.IndexerStatus, error) {
 }
 
 func FindInstalledPack(language Language) (Indexer, bool) {
-	path, found, err := installedPackPath(language)
+	pack, found, err := findInstalledPack(language)
 	if err != nil || !found {
 		return nil, false
 	}
-	return ProcessIndexer{language: language, path: path}, true
+	return ProcessIndexer{language: language, path: pack.Path, descriptor: pack.Descriptor}, true
 }
 
-func installedPackPath(language Language) (string, bool, error) {
+func findInstalledPack(language Language) (installedPack, bool, error) {
 	configDir, err := os.UserConfigDir()
 	if err != nil {
-		return "", false, fmt.Errorf("locate user configuration directory: %w", err)
+		return installedPack{}, false, fmt.Errorf("locate user configuration directory: %w", err)
 	}
-	path := filepath.Join(configDir, "thread-keep", "packs", packID(language))
-	info, err := os.Stat(path)
-	if errors.Is(err, os.ErrNotExist) || (err == nil && (!info.Mode().IsRegular() || info.Mode()&0o111 == 0)) {
-		return "", false, nil
-	}
-	if err != nil {
-		return "", false, fmt.Errorf("inspect %s pack: %w", language, err)
-	}
-	return path, true, nil
+	return resolveAvailablePack(configDir, os.Getenv(bundledPackDirectoryEnv), os.Getenv(bundledPackVersionEnv), language)
 }
 
-func (p ProcessIndexer) Descriptor() Descriptor { return Descriptor{ID: packID(p.language)} }
+func (p ProcessIndexer) Descriptor() Descriptor {
+	if p.descriptor.ID != "" {
+		return p.descriptor
+	}
+	return Descriptor{ID: packID(p.language)}
+}
 
 func (p ProcessIndexer) Index(ctx context.Context, request Request) (Result, error) {
 	payload, err := json.Marshal(protocolRequest{ProtocolVersion: protocolVersion, RepositoryRoot: request.RepositoryRoot, SourceSHA: request.SourceSHA, Language: request.Language, Files: request.Files})
@@ -144,7 +148,8 @@ func (p ProcessIndexer) Index(ctx context.Context, request Request) (Result, err
 	if response.ProtocolVersion != protocolVersion || response.Language != request.Language {
 		return Result{}, errors.New("pack response has an incompatible protocol or language")
 	}
-	if response.Indexer.ID != p.Descriptor().ID || response.Indexer.Version == "" {
+	expected := p.Descriptor()
+	if response.Indexer.ID != expected.ID || response.Indexer.Version == "" || expected.Version != "" && response.Indexer.Version != expected.Version {
 		return Result{}, errors.New("pack response has an invalid indexer identity")
 	}
 	entities, err := normalizeEntities(request, response.Entities)

@@ -36,13 +36,20 @@ func TestInstallerPublishesVerifiedCurrentPlatformPack(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	configDir := t.TempDir()
+	configDir := testUserConfigDir(t)
 	installer := testInstaller(server, publicKey, configDir)
 
 	if err := installer.Install(context.Background(), []Language{TypeScript}); err != nil {
 		t.Fatalf("Install() error = %v", err)
 	}
-	target := filepath.Join(configDir, "thread-keep", "packs", packID(TypeScript))
+	activation, err := loadPackActivation(configDir, TypeScript)
+	if err != nil {
+		t.Fatalf("loadPackActivation() error = %v", err)
+	}
+	if activation.PackID != packID(TypeScript) || activation.Version != "1.0.0" || activation.ProtocolVersion != protocolVersion || activation.Size != int64(len(artifact)) || activation.SHA256 != digest {
+		t.Fatalf("installed activation = %#v", activation)
+	}
+	target := filepath.Join(configDir, "thread-keep", "packs", "objects", packID(TypeScript), digest)
 	contents, err := os.ReadFile(target)
 	if err != nil {
 		t.Fatalf("ReadFile(installed pack): %v", err)
@@ -56,6 +63,46 @@ func TestInstallerPublishesVerifiedCurrentPlatformPack(t *testing.T) {
 	}
 	if !info.Mode().IsRegular() || info.Mode()&0o111 == 0 {
 		t.Fatalf("installed pack mode = %v, want executable regular file", info.Mode())
+	}
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "app.ts"), []byte("export function run() {}"), 0o644); err != nil {
+		t.Fatalf("WriteFile(app.ts): %v", err)
+	}
+	statuses, err := List(context.Background(), root)
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if statuses[1].State != domain.IndexerInstalled || statuses[1].Path != target || statuses[1].Version != "1.0.0" || statuses[1].SHA256 != digest {
+		t.Fatalf("TypeScript status = %#v", statuses[1])
+	}
+}
+
+func TestInstallerUsesWindowsExecutableNameForManagedPack(t *testing.T) {
+	publicKey, privateKey := testSigningKey(t)
+	artifact := []byte("windows pack")
+	digest := sha256Hex(artifact)
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/manifest":
+			writeSignedManifest(t, writer, testManifest(server.URL+"/assets/typescript", "windows", runtime.GOARCH, int64(len(artifact)), digest), privateKey)
+		case "/assets/typescript":
+			_, _ = writer.Write(artifact)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+	configDir := t.TempDir()
+	installer := testInstaller(server, publicKey, configDir)
+	installer.GOOS = "windows"
+
+	if err := installer.Install(context.Background(), []Language{TypeScript}); err != nil {
+		t.Fatalf("Install() error = %v", err)
+	}
+	target := filepath.Join(packObjectDirectory(configDir, TypeScript), digest+".exe")
+	if _, err := os.Stat(target); err != nil {
+		t.Fatalf("Stat(installed Windows pack): %v", err)
 	}
 }
 
@@ -83,7 +130,7 @@ func TestInstallerPublishesVerifiedCurrentPlatformJavaScriptPack(t *testing.T) {
 	if err := installer.Install(context.Background(), []Language{JavaScript}); err != nil {
 		t.Fatalf("Install() error = %v", err)
 	}
-	target := filepath.Join(configDir, "thread-keep", "packs", packID(JavaScript))
+	target := packObjectPath(configDir, JavaScript, digest)
 	contents, err := os.ReadFile(target)
 	if err != nil {
 		t.Fatalf("ReadFile(installed JavaScript pack): %v", err)
@@ -117,7 +164,7 @@ func TestInstallerPublishesVerifiedCurrentPlatformPythonPack(t *testing.T) {
 	if err := installer.Install(context.Background(), []Language{Python}); err != nil {
 		t.Fatalf("Install() error = %v", err)
 	}
-	target := filepath.Join(configDir, "thread-keep", "packs", packID(Python))
+	target := packObjectPath(configDir, Python, digest)
 	contents, err := os.ReadFile(target)
 	if err != nil {
 		t.Fatalf("ReadFile(installed Python pack): %v", err)
@@ -151,7 +198,7 @@ func TestInstallerPublishesVerifiedCurrentPlatformJavaPack(t *testing.T) {
 	if err := installer.Install(context.Background(), []Language{Java}); err != nil {
 		t.Fatalf("Install() error = %v", err)
 	}
-	target := filepath.Join(configDir, "thread-keep", "packs", packID(Java))
+	target := packObjectPath(configDir, Java, digest)
 	contents, err := os.ReadFile(target)
 	if err != nil {
 		t.Fatalf("ReadFile(installed Java pack): %v", err)
@@ -185,7 +232,7 @@ func TestInstallerPublishesVerifiedCurrentPlatformKotlinPack(t *testing.T) {
 	if err := installer.Install(context.Background(), []Language{Kotlin}); err != nil {
 		t.Fatalf("Install() error = %v", err)
 	}
-	target := filepath.Join(configDir, "thread-keep", "packs", packID(Kotlin))
+	target := packObjectPath(configDir, Kotlin, digest)
 	contents, err := os.ReadFile(target)
 	if err != nil {
 		t.Fatalf("ReadFile(installed Kotlin pack): %v", err)
@@ -219,13 +266,152 @@ func TestInstallerPublishesVerifiedCurrentPlatformRustPack(t *testing.T) {
 	if err := installer.Install(context.Background(), []Language{Rust}); err != nil {
 		t.Fatalf("Install() error = %v", err)
 	}
-	target := filepath.Join(configDir, "thread-keep", "packs", packID(Rust))
+	target := packObjectPath(configDir, Rust, digest)
 	contents, err := os.ReadFile(target)
 	if err != nil {
 		t.Fatalf("ReadFile(installed Rust pack): %v", err)
 	}
 	if string(contents) != string(artifact) {
 		t.Fatalf("installed Rust pack = %q, want %q", contents, artifact)
+	}
+}
+
+func TestInstallerSyncActivatesVerifiedReplacement(t *testing.T) {
+	publicKey, privateKey := testSigningKey(t)
+	artifact := []byte("first")
+	version := "1.0.0"
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/manifest":
+			value := testManifest(server.URL+"/assets/typescript", runtime.GOOS, runtime.GOARCH, int64(len(artifact)), sha256Hex(artifact))
+			value.Packs[0].Version = version
+			writeSignedManifest(t, writer, value, privateKey)
+		case "/assets/typescript":
+			_, _ = writer.Write(artifact)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+	configDir := t.TempDir()
+	installer := testInstaller(server, publicKey, configDir)
+	if err := installer.Install(context.Background(), []Language{TypeScript}); err != nil {
+		t.Fatalf("Install() error = %v", err)
+	}
+	firstDigest := sha256Hex(artifact)
+
+	artifact = []byte("second")
+	version = "2.0.0"
+	if err := installer.Sync(context.Background(), []Language{TypeScript}); err != nil {
+		t.Fatalf("Sync() error = %v", err)
+	}
+	activation, err := loadPackActivation(configDir, TypeScript)
+	if err != nil {
+		t.Fatalf("loadPackActivation() error = %v", err)
+	}
+	secondDigest := sha256Hex(artifact)
+	if activation.Version != version || activation.SHA256 != secondDigest {
+		t.Fatalf("activation after sync = %#v", activation)
+	}
+	if _, err := os.Stat(packObjectPath(configDir, TypeScript, firstDigest)); err != nil {
+		t.Fatalf("previous immutable artifact after sync: %v", err)
+	}
+	if contents, err := os.ReadFile(packObjectPath(configDir, TypeScript, secondDigest)); err != nil || string(contents) != string(artifact) {
+		t.Fatalf("active artifact after sync = %q, %v", contents, err)
+	}
+}
+
+func TestInstallerFailedSyncPreservesActivePack(t *testing.T) {
+	publicKey, privateKey := testSigningKey(t)
+	artifact := []byte("first")
+	valid := true
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/manifest":
+			digest := sha256Hex(artifact)
+			if !valid {
+				digest = sha256Hex([]byte("different"))
+			}
+			value := testManifest(server.URL+"/assets/typescript", runtime.GOOS, runtime.GOARCH, int64(len(artifact)), digest)
+			writeSignedManifest(t, writer, value, privateKey)
+		case "/assets/typescript":
+			_, _ = writer.Write(artifact)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+	configDir := t.TempDir()
+	installer := testInstaller(server, publicKey, configDir)
+	if err := installer.Install(context.Background(), []Language{TypeScript}); err != nil {
+		t.Fatalf("Install() error = %v", err)
+	}
+	before, err := loadPackActivation(configDir, TypeScript)
+	if err != nil {
+		t.Fatalf("loadPackActivation() before sync error = %v", err)
+	}
+	valid = false
+	if err := installer.Sync(context.Background(), []Language{TypeScript}); domain.CodeOf(err) != domain.CodeValidation {
+		t.Fatalf("Sync() error = %v, want validation", err)
+	}
+	after, err := loadPackActivation(configDir, TypeScript)
+	if err != nil {
+		t.Fatalf("loadPackActivation() after sync error = %v", err)
+	}
+	if after != before {
+		t.Fatalf("activation after failed sync = %#v, want %#v", after, before)
+	}
+}
+
+func TestInstallerRejectsManifestVersionMismatch(t *testing.T) {
+	publicKey, privateKey := testSigningKey(t)
+	artifact := []byte("pack")
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/manifest":
+			writeSignedManifest(t, writer, testManifest(server.URL+"/assets/typescript", runtime.GOOS, runtime.GOARCH, int64(len(artifact)), sha256Hex(artifact)), privateKey)
+		case "/assets/typescript":
+			_, _ = writer.Write(artifact)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+	configDir := t.TempDir()
+	installer := testInstaller(server, publicKey, configDir)
+	installer.ExpectedVersion = "2.0.0"
+	if err := installer.Sync(context.Background(), []Language{TypeScript}); domain.CodeOf(err) != domain.CodeValidation {
+		t.Fatalf("Sync() error = %v, want validation", err)
+	}
+	if _, err := os.Stat(packDirectory(configDir)); !os.IsNotExist(err) {
+		t.Fatalf("version mismatch created pack storage: %v", err)
+	}
+}
+
+func TestOfficialManifestURLSelectsLatestOrExactStableVersion(t *testing.T) {
+	if got, err := officialManifestURLForVersion(""); err != nil || got != officialManifestURL {
+		t.Fatalf("latest manifest URL = %q, %v", got, err)
+	}
+	if got, err := officialManifestURLForVersion("1.2.3"); err != nil || got != "https://github.com/tae2089/thread-keep/releases/download/v1.2.3/thread-keep-indexers-manifest-v1.json" {
+		t.Fatalf("exact manifest URL = %q, %v", got, err)
+	}
+	for _, version := range []string{"v1.2.3", "1.2", "1.02.3", "1.2.3-beta"} {
+		if _, err := officialManifestURLForVersion(version); domain.CodeOf(err) != domain.CodeValidation {
+			t.Fatalf("officialManifestURLForVersion(%q) error = %v, want validation", version, err)
+		}
+	}
+}
+
+func TestSyncDetectedRejectsInvalidVersionBeforeNoop(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main"), 0o644); err != nil {
+		t.Fatalf("WriteFile(main.go): %v", err)
+	}
+	if _, err := SyncDetected(context.Background(), root, "v1.2.3"); domain.CodeOf(err) != domain.CodeValidation {
+		t.Fatalf("SyncDetected() error = %v, want validation", err)
 	}
 }
 
@@ -334,6 +520,12 @@ func TestInstallerRejectsInvalidVerifiedManifestContent(t *testing.T) {
 			},
 		},
 		{
+			name: "non-stable pack version",
+			mutate: func(value *manifest) {
+				value.Packs[0].Version = "1.2.3-beta"
+			},
+		},
+		{
 			name: "unsupported protocol",
 			mutate: func(value *manifest) {
 				value.Packs[0].ProtocolVersion++
@@ -392,7 +584,7 @@ func TestInstallerRejectsUntrustedArtifactRedirect(t *testing.T) {
 	}
 }
 
-func TestInstallerCleansTemporaryArtifactWhenNoReplacePublishFails(t *testing.T) {
+func TestInstallerCleansTemporaryArtifactWhenImmutablePublishTargetIsInvalid(t *testing.T) {
 	publicKey, privateKey := testSigningKey(t)
 	artifact := []byte("next")
 	var server *httptest.Server
@@ -409,14 +601,14 @@ func TestInstallerCleansTemporaryArtifactWhenNoReplacePublishFails(t *testing.T)
 	}))
 	defer server.Close()
 	configDir := t.TempDir()
-	directory := filepath.Join(configDir, "thread-keep", "packs")
-	target := filepath.Join(directory, packID(TypeScript))
+	directory := packObjectDirectory(configDir, TypeScript)
+	target := packObjectPath(configDir, TypeScript, sha256Hex(artifact))
 	if err := os.MkdirAll(target, 0o755); err != nil {
 		t.Fatalf("MkdirAll(target directory): %v", err)
 	}
 	installer := testInstaller(server, publicKey, configDir)
-	if err := installer.Install(context.Background(), []Language{TypeScript}); domain.CodeOf(err) != domain.CodeLocalStorage {
-		t.Fatalf("Install() error = %v, want local storage", err)
+	if err := installer.Install(context.Background(), []Language{TypeScript}); domain.CodeOf(err) != domain.CodeValidation {
+		t.Fatalf("Install() error = %v, want validation", err)
 	}
 	info, err := os.Stat(target)
 	if err != nil {
@@ -429,7 +621,7 @@ func TestInstallerCleansTemporaryArtifactWhenNoReplacePublishFails(t *testing.T)
 	if err != nil {
 		t.Fatalf("ReadDir(pack directory): %v", err)
 	}
-	if len(entries) != 1 || entries[0].Name() != packID(TypeScript) {
+	if len(entries) != 1 || entries[0].Name() != packExecutableName(sha256Hex(artifact)) {
 		t.Fatalf("pack directory after failed publish = %#v, want only original target", entries)
 	}
 }
@@ -468,29 +660,6 @@ func TestInstallerDoesNotOverwriteExistingExecutablePack(t *testing.T) {
 	}
 	if string(contents) != "existing" {
 		t.Fatalf("existing pack after install = %q, want preserved contents", contents)
-	}
-}
-
-func TestPublishNoReplacePreservesExecutableTarget(t *testing.T) {
-	directory := t.TempDir()
-	temporary := filepath.Join(directory, ".thread-keep-index-typescript-temp")
-	target := filepath.Join(directory, packID(TypeScript))
-	if err := os.WriteFile(temporary, []byte("verified"), 0o755); err != nil {
-		t.Fatalf("WriteFile(temporary): %v", err)
-	}
-	if err := os.WriteFile(target, []byte("concurrent"), 0o755); err != nil {
-		t.Fatalf("WriteFile(target): %v", err)
-	}
-
-	if err := publishNoReplace(temporary, target); domain.CodeOf(err) != domain.CodeBusy {
-		t.Fatalf("publishNoReplace() error = %v, want busy", err)
-	}
-	contents, err := os.ReadFile(target)
-	if err != nil {
-		t.Fatalf("ReadFile(target): %v", err)
-	}
-	if string(contents) != "concurrent" {
-		t.Fatalf("target after no-replace publish = %q, want preserved contents", contents)
 	}
 }
 

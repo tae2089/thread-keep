@@ -54,13 +54,7 @@ func (g GoIndexer) Index(ctx context.Context, request Request) (Result, error) {
 }
 
 func NewCoordinator() Coordinator {
-	coordinator := Coordinator{Go: GoIndexer{}, Packs: map[Language]Indexer{}}
-	for _, language := range externalPackLanguages {
-		if pack, found := FindInstalledPack(language); found {
-			coordinator.Packs[language] = pack
-		}
-	}
-	return coordinator
+	return Coordinator{Go: GoIndexer{}}
 }
 
 func (c Coordinator) Index(ctx context.Context, root, sourceSHA string) ([]domain.LanguageProjection, error) {
@@ -132,8 +126,11 @@ func (c Coordinator) forLanguage(language Language) (Indexer, bool) {
 	if language == Go && c.Go != nil {
 		return c.Go, true
 	}
-	indexer, found := c.Packs[language]
-	return indexer, found
+	if c.Packs != nil {
+		indexer, found := c.Packs[language]
+		return indexer, found
+	}
+	return FindInstalledPack(language)
 }
 
 func packID(language Language) string {

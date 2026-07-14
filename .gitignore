@@ -17,6 +17,10 @@
 node_modules/
 npm-debug.log*
 
+# Python tooling
+__pycache__/
+*.py[cod]
+
 # Local agent and task state
 /.agent-team/
 /_workspace/

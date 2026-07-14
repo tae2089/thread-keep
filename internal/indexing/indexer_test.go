@@ -62,10 +62,11 @@ func TestCoordinatorMarksInvalidSuccessfulResultAsFailedCoverage(t *testing.T) {
 	}
 }
 
-func TestNewCoordinatorUsesInstalledJavaScriptPack(t *testing.T) {
+func TestNewCoordinatorResolvesInstalledJavaScriptPackAtIndexTime(t *testing.T) {
 	configDir := testUserConfigDir(t)
 	root := t.TempDir()
 	writeIndexSource(t, root, "web/app.js", "export function run() {}\n")
+	coordinator := NewCoordinator()
 	packPath := filepath.Join(configDir, "thread-keep", "packs", packID(JavaScript))
 	if err := os.MkdirAll(filepath.Dir(packPath), 0o755); err != nil {
 		t.Fatalf("MkdirAll(pack directory): %v", err)
@@ -75,7 +76,7 @@ func TestNewCoordinatorUsesInstalledJavaScriptPack(t *testing.T) {
 		t.Fatalf("WriteFile(JavaScript pack): %v", err)
 	}
 
-	projections, err := NewCoordinator().Index(context.Background(), root, "sha")
+	projections, err := coordinator.Index(context.Background(), root, "sha")
 	if err != nil {
 		t.Fatalf("Index() error = %v", err)
 	}

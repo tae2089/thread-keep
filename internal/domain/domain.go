@@ -93,6 +93,8 @@ type IndexerStatus struct {
 	State    IndexerState `json:"state"`
 	Detected bool         `json:"detected"`
 	Path     string       `json:"path,omitempty"`
+	Version  string       `json:"version,omitempty"`
+	SHA256   string       `json:"sha256,omitempty"`
 }
 
 type NoteKind string

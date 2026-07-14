@@ -97,7 +97,7 @@ class WithAnonymous {
 		"WithAnonymous":            "class",
 		"buildProject":             "function",
 	}
-	if got.Indexer.ID != "thread-keep-index-kotlin" || got.Language != "kotlin" || len(got.Entities) != len(want) {
+	if got.Indexer.ID != "thread-keep-index-kotlin" || got.Indexer.Version != "dev" || got.Language != "kotlin" || len(got.Entities) != len(want) {
 		t.Fatalf("response = %#v, want Kotlin entities %#v", got, want)
 	}
 	for _, entity := range got.Entities {

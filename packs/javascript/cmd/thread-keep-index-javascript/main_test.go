@@ -55,7 +55,7 @@ export const helper = () => {}
 		"run":             "function",
 		"Widget":          "function",
 	}
-	if got.Indexer.ID != "thread-keep-index-javascript" || got.Language != "javascript" || len(got.Entities) != len(want) {
+	if got.Indexer.ID != "thread-keep-index-javascript" || got.Indexer.Version != "dev" || got.Language != "javascript" || len(got.Entities) != len(want) {
 		t.Fatalf("response = %#v, want JavaScript entities %#v", got, want)
 	}
 	for _, entity := range got.Entities {

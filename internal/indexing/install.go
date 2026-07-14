@@ -14,7 +14,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -51,6 +50,7 @@ type Installer struct {
 	TrustedArtifactPrefix string
 	AllowedRedirectHosts  map[string]bool
 	AllowHTTP             bool
+	ExpectedVersion       string
 }
 
 type manifestEnvelope struct {
@@ -102,14 +102,49 @@ func InstallDetected(ctx context.Context, root string) ([]domain.IndexerStatus, 
 	return List(ctx, root)
 }
 
+func SyncDetected(ctx context.Context, root, version string) ([]domain.IndexerStatus, error) {
+	if version != "" && !validReleaseVersion(version) {
+		return nil, domain.NewError(domain.CodeValidation, errors.New("indexer version must be stable SemVer X.Y.Z"))
+	}
+	candidates, err := DetectContext(ctx, root)
+	if err != nil {
+		return nil, err
+	}
+	var languages []Language
+	for _, candidate := range candidates {
+		if isExternalPackLanguage(candidate.Language) {
+			languages = append(languages, candidate.Language)
+		}
+	}
+	if len(languages) == 0 {
+		return List(ctx, root)
+	}
+	installer, err := newOfficialInstallerForVersion(version)
+	if err != nil {
+		return nil, err
+	}
+	if err := installer.Sync(ctx, languages); err != nil {
+		return nil, err
+	}
+	return List(ctx, root)
+}
+
 func newOfficialInstaller() (Installer, error) {
+	return newOfficialInstallerForVersion("")
+}
+
+func newOfficialInstallerForVersion(version string) (Installer, error) {
+	manifestURL, err := officialManifestURLForVersion(version)
+	if err != nil {
+		return Installer{}, err
+	}
 	publicKey, err := decodePublicKey(officialManifestPublicKeyBase64)
 	if err != nil {
 		return Installer{}, err
 	}
 	return Installer{
 		Client:                &http.Client{Timeout: 30 * time.Second},
-		ManifestURL:           officialManifestURL,
+		ManifestURL:           manifestURL,
 		PublicKey:             publicKey,
 		GOOS:                  runtime.GOOS,
 		GOARCH:                runtime.GOARCH,
@@ -121,7 +156,18 @@ func newOfficialInstaller() (Installer, error) {
 			officialObjectsHost:      true,
 			officialReleaseAssetHost: true,
 		},
+		ExpectedVersion: version,
 	}, nil
+}
+
+func officialManifestURLForVersion(version string) (string, error) {
+	if version == "" {
+		return officialManifestURL, nil
+	}
+	if !validReleaseVersion(version) {
+		return "", domain.NewError(domain.CodeValidation, errors.New("indexer version must be stable SemVer X.Y.Z"))
+	}
+	return officialArtifactPrefix + "v" + version + "/thread-keep-indexers-manifest-v1.json", nil
 }
 
 func decodePublicKey(value string) (ed25519.PublicKey, error) {
@@ -136,6 +182,14 @@ func decodePublicKey(value string) (ed25519.PublicKey, error) {
 }
 
 func (i Installer) Install(ctx context.Context, languages []Language) error {
+	return i.install(ctx, languages, false)
+}
+
+func (i Installer) Sync(ctx context.Context, languages []Language) error {
+	return i.install(ctx, languages, true)
+}
+
+func (i Installer) install(ctx context.Context, languages []Language, replace bool) error {
 	if err := i.validate(); err != nil {
 		return err
 	}
@@ -146,6 +200,19 @@ func (i Installer) Install(ctx context.Context, languages []Language) error {
 	if len(requested) == 0 {
 		return nil
 	}
+	if !replace {
+		configDir, err := i.UserConfigDir()
+		if err != nil {
+			return domain.NewError(domain.CodeLocalStorage, fmt.Errorf("locate user configuration directory: %w", err))
+		}
+		for _, language := range requested {
+			if _, found, err := resolveInstalledPack(configDir, language); err != nil {
+				return err
+			} else if found {
+				return domain.NewError(domain.CodeBusy, fmt.Errorf("an executable %s pack already exists", language))
+			}
+		}
+	}
 	contents, err := i.fetchBytes(ctx, i.ManifestURL, maxManifestBytes, i.validateManifestURL)
 	if err != nil {
 		return err
@@ -155,11 +222,11 @@ func (i Installer) Install(ctx context.Context, languages []Language) error {
 		return err
 	}
 	for _, language := range requested {
-		asset, err := i.selectAsset(manifest, language)
+		pack, asset, err := i.selectAsset(manifest, language)
 		if err != nil {
 			return err
 		}
-		if err := i.installAsset(ctx, language, asset); err != nil {
+		if err := i.installAsset(ctx, language, pack, asset); err != nil {
 			return err
 		}
 	}
@@ -172,6 +239,9 @@ func (i Installer) validate() error {
 	}
 	if len(i.PublicKey) != ed25519.PublicKeySize {
 		return domain.NewError(domain.CodeValidation, errors.New("official manifest verification key is invalid"))
+	}
+	if i.ExpectedVersion != "" && !validReleaseVersion(i.ExpectedVersion) {
+		return domain.NewError(domain.CodeValidation, errors.New("expected indexer version must be stable SemVer X.Y.Z"))
 	}
 	if _, err := i.parseURL(i.ManifestURL); err != nil {
 		return err
@@ -233,8 +303,11 @@ func (i Installer) validateManifest(value manifest) error {
 	}
 	packs := make(map[string]struct{}, len(value.Packs))
 	for _, pack := range value.Packs {
-		if !isExternalPackID(pack.ID) || strings.TrimSpace(pack.Version) == "" || pack.ProtocolVersion != protocolVersion || len(pack.Assets) == 0 {
+		if !isExternalPackID(pack.ID) || !validReleaseVersion(pack.Version) || pack.ProtocolVersion != protocolVersion || len(pack.Assets) == 0 {
 			return domain.NewError(domain.CodeValidation, errors.New("verified pack manifest contains an invalid pack"))
+		}
+		if i.ExpectedVersion != "" && pack.Version != i.ExpectedVersion {
+			return domain.NewError(domain.CodeValidation, errors.New("verified pack manifest version does not match the requested version"))
 		}
 		if _, found := packs[pack.ID]; found {
 			return domain.NewError(domain.CodeValidation, errors.New("verified pack manifest contains duplicate pack IDs"))
@@ -266,7 +339,7 @@ func validSHA256(value string) bool {
 	return err == nil
 }
 
-func (i Installer) selectAsset(value manifest, language Language) (manifestAsset, error) {
+func (i Installer) selectAsset(value manifest, language Language) (manifestPack, manifestAsset, error) {
 	wantID := packID(language)
 	for _, pack := range value.Packs {
 		if pack.ID != wantID {
@@ -274,26 +347,23 @@ func (i Installer) selectAsset(value manifest, language Language) (manifestAsset
 		}
 		for _, asset := range pack.Assets {
 			if asset.GOOS == i.GOOS && asset.GOARCH == i.GOARCH {
-				return asset, nil
+				return pack, asset, nil
 			}
 		}
 	}
-	return manifestAsset{}, domain.NewError(domain.CodeValidation, fmt.Errorf("no official %s pack for %s/%s", language, i.GOOS, i.GOARCH))
+	return manifestPack{}, manifestAsset{}, domain.NewError(domain.CodeValidation, fmt.Errorf("no official %s pack for %s/%s", language, i.GOOS, i.GOARCH))
 }
 
-func (i Installer) installAsset(ctx context.Context, language Language, asset manifestAsset) error {
+func (i Installer) installAsset(ctx context.Context, language Language, pack manifestPack, asset manifestAsset) error {
 	configDir, err := i.UserConfigDir()
 	if err != nil {
 		return domain.NewError(domain.CodeLocalStorage, fmt.Errorf("locate user configuration directory: %w", err))
 	}
-	directory := filepath.Join(configDir, "thread-keep", "packs")
+	directory := packObjectDirectory(configDir, language)
 	if err := os.MkdirAll(directory, 0o755); err != nil {
 		return domain.NewError(domain.CodeLocalStorage, fmt.Errorf("create pack directory: %w", err))
 	}
-	target := filepath.Join(directory, packID(language))
-	if err := rejectExecutableTarget(target); err != nil {
-		return err
-	}
+	target := packObjectPathForGOOS(configDir, language, asset.SHA256, i.GOOS)
 	temporary, err := os.CreateTemp(directory, "."+packID(language)+"-*")
 	if err != nil {
 		return domain.NewError(domain.CodeLocalStorage, fmt.Errorf("create pack temp file: %w", err))
@@ -335,11 +405,41 @@ func (i Installer) installAsset(ctx context.Context, language Language, asset ma
 	if err := temporary.Close(); err != nil {
 		return domain.NewError(domain.CodeLocalStorage, fmt.Errorf("close pack artifact: %w", err))
 	}
-	if err := rejectExecutableTarget(target); err != nil {
+	if err := publishImmutablePack(temporaryName, target, asset); err != nil {
 		return err
 	}
-	if err := publishNoReplace(temporaryName, target); err != nil {
-		return err
+	if err := syncDirectory(directory); err != nil {
+		return domain.NewError(domain.CodeLocalStorage, err)
+	}
+	return i.activatePack(configDir, language, pack, asset)
+}
+
+func (i Installer) activatePack(configDir string, language Language, pack manifestPack, asset manifestAsset) error {
+	directory := packDirectory(configDir)
+	if err := os.MkdirAll(directory, 0o755); err != nil {
+		return domain.NewError(domain.CodeLocalStorage, fmt.Errorf("create pack directory: %w", err))
+	}
+	activation := packActivation{SchemaVersion: packActivationSchemaVersion, PackID: pack.ID, Version: pack.Version, ProtocolVersion: pack.ProtocolVersion, Size: asset.Size, SHA256: asset.SHA256}
+	temporary, err := os.CreateTemp(directory, "."+packID(language)+"-activation-*")
+	if err != nil {
+		return domain.NewError(domain.CodeLocalStorage, fmt.Errorf("create pack activation temp file: %w", err))
+	}
+	temporaryName := temporary.Name()
+	defer os.Remove(temporaryName)
+	encoder := json.NewEncoder(temporary)
+	if err := encoder.Encode(activation); err != nil {
+		_ = temporary.Close()
+		return domain.NewError(domain.CodeLocalStorage, fmt.Errorf("encode pack activation: %w", err))
+	}
+	if err := temporary.Sync(); err != nil {
+		_ = temporary.Close()
+		return domain.NewError(domain.CodeLocalStorage, fmt.Errorf("sync pack activation: %w", err))
+	}
+	if err := temporary.Close(); err != nil {
+		return domain.NewError(domain.CodeLocalStorage, fmt.Errorf("close pack activation: %w", err))
+	}
+	if err := os.Rename(temporaryName, packActivationPath(configDir, language)); err != nil {
+		return domain.NewError(domain.CodeLocalStorage, fmt.Errorf("activate pack: %w", err))
 	}
 	if err := syncDirectory(directory); err != nil {
 		return domain.NewError(domain.CodeLocalStorage, err)
@@ -347,29 +447,14 @@ func (i Installer) installAsset(ctx context.Context, language Language, asset ma
 	return nil
 }
 
-func rejectExecutableTarget(path string) error {
-	info, err := os.Stat(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return domain.NewError(domain.CodeLocalStorage, fmt.Errorf("inspect existing pack target: %w", err))
-	}
-	if info.Mode().IsRegular() && info.Mode()&0o111 != 0 {
-		return domain.NewError(domain.CodeBusy, errors.New("an executable pack already exists at the installation target"))
-	}
-	return nil
-}
-
-func publishNoReplace(temporaryName, target string) error {
+func publishImmutablePack(temporaryName, target string, asset manifestAsset) error {
 	if err := os.Link(temporaryName, target); err != nil {
-		if errors.Is(err, os.ErrExist) {
-			if targetErr := rejectExecutableTarget(target); targetErr != nil {
-				return targetErr
-			}
-			return domain.NewError(domain.CodeLocalStorage, errors.New("pack installation target already exists"))
+		if !errors.Is(err, os.ErrExist) {
+			return domain.NewError(domain.CodeLocalStorage, fmt.Errorf("publish pack artifact: %w", err))
 		}
-		return domain.NewError(domain.CodeLocalStorage, fmt.Errorf("publish pack artifact: %w", err))
+		if verifyErr := verifyPackArtifact(target, asset.Size, asset.SHA256); verifyErr != nil {
+			return verifyErr
+		}
 	}
 	if err := os.Remove(temporaryName); err != nil {
 		return domain.NewError(domain.CodeLocalStorage, fmt.Errorf("remove published pack temp file: %w", err))

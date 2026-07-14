@@ -144,10 +144,13 @@ thread-keep update
   -> automatically select installed packs for detected languages
 
 thread-keep indexers install --detected
-  -> explicit installation boundary for detected official packs
+  -> install detected missing official packs without replacing an active pack
+
+thread-keep indexers sync --detected [--version X.Y.Z]
+  -> explicitly activate latest or exact-version official packs for detected languages
 ~~~
 
-Packs live in the user configuration directory, not each repository. The core resolves fixed official TypeScript, JavaScript, Python, Java, Kotlin, and Rust pack filenames there and records their ID/version from the protocol. A release binary embeds an Ed25519 public key and accepts the official GitHub Releases signed manifest only. `indexers install --detected` verifies the signed manifest, selects a current-platform asset, verifies byte size and SHA-256, then atomically publishes it. Repositories store coverage/provenance only and never a downloaded executable.
+Packs live in the user configuration directory, not each repository. Managed binaries are immutable objects keyed by SHA-256; a bounded activation document records the signed pack ID, release version, protocol, size and digest. One atomic activation-document rename changes the selected version. The core still accepts legacy fixed official filenames for manual builds and container images. A release binary embeds an Ed25519 public key and accepts the official GitHub Releases signed manifest only. `indexers install --detected` activates only missing packs; `indexers sync --detected` explicitly replaces detected packs from latest or an exact stable release. Repositories store coverage/provenance only and never a downloaded executable.
 
 ## Pack protocol
 
@@ -286,7 +289,7 @@ Additional future commands:
 <additional language pack commands as new official packs are introduced>
 ~~~
 
-`thread-keep update --require-complete`, `thread-keep indexers list`, and `thread-keep indexers install --detected` are implemented. The installer is explicit, never runs during init/update, and requires a release-binary public key.
+`thread-keep update --require-complete`, `thread-keep indexers list`, `thread-keep indexers install --detected`, and `thread-keep indexers sync --detected [--version X.Y.Z]` are implemented. Install is missing-only; sync is the explicit upgrade/pin/rollback operation. Neither runs during init/update, and both networked operations require a release-binary public key.
 
 ### Signed official manifest
 

@@ -186,3 +186,69 @@ func TestProcessIndexerRejectsProtocolV2Response(t *testing.T) {
 		t.Fatal("Index() error = nil, want protocol v2 rejection")
 	}
 }
+
+func TestProcessIndexerRejectsManagedPackVersionMismatch(t *testing.T) {
+	root := t.TempDir()
+	pack := filepath.Join(root, "thread-keep-index-typescript")
+	script := "#!/bin/sh\nprintf '%s\\n' '{\"protocol_version\":1,\"indexer\":{\"id\":\"thread-keep-index-typescript\",\"version\":\"2.0.0\"},\"language\":\"typescript\",\"entities\":[]}'\n"
+	if err := os.WriteFile(pack, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake pack: %v", err)
+	}
+	indexer := ProcessIndexer{language: TypeScript, path: pack, descriptor: Descriptor{ID: packID(TypeScript), Version: "1.0.0"}}
+	if _, err := indexer.Index(context.Background(), Request{RepositoryRoot: root, SourceSHA: "sha", Language: TypeScript}); err == nil {
+		t.Fatal("Index() error = nil, want managed version mismatch")
+	}
+}
+
+func TestResolveAvailablePackFallsBackToBundledPack(t *testing.T) {
+	configDir := t.TempDir()
+	bundledDir := t.TempDir()
+	bundledPath := filepath.Join(bundledDir, packExecutableName(packID(TypeScript)))
+	if err := os.WriteFile(bundledPath, []byte("pack"), 0o755); err != nil {
+		t.Fatalf("WriteFile(bundled pack): %v", err)
+	}
+
+	pack, found, err := resolveAvailablePack(configDir, bundledDir, "1.2.3", TypeScript)
+	if err != nil {
+		t.Fatalf("resolveAvailablePack() error = %v", err)
+	}
+	if !found || pack.Path != bundledPath || pack.Descriptor.ID != packID(TypeScript) || pack.Descriptor.Version != "1.2.3" {
+		t.Fatalf("resolveAvailablePack() = %#v, %v, want bundled release pack", pack, found)
+	}
+}
+
+func TestResolveAvailablePackPrefersLocalPackOverBundledPack(t *testing.T) {
+	configDir := t.TempDir()
+	localPath := filepath.Join(packDirectory(configDir), packExecutableName(packID(TypeScript)))
+	if err := os.MkdirAll(filepath.Dir(localPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(local pack directory): %v", err)
+	}
+	if err := os.WriteFile(localPath, []byte("local"), 0o755); err != nil {
+		t.Fatalf("WriteFile(local pack): %v", err)
+	}
+	bundledDir := t.TempDir()
+	bundledPath := filepath.Join(bundledDir, packExecutableName(packID(TypeScript)))
+	if err := os.WriteFile(bundledPath, []byte("bundled"), 0o755); err != nil {
+		t.Fatalf("WriteFile(bundled pack): %v", err)
+	}
+
+	pack, found, err := resolveAvailablePack(configDir, bundledDir, "1.2.3", TypeScript)
+	if err != nil {
+		t.Fatalf("resolveAvailablePack() error = %v", err)
+	}
+	if !found || pack.Path != localPath || pack.Descriptor.Version != "" {
+		t.Fatalf("resolveAvailablePack() = %#v, %v, want local pack", pack, found)
+	}
+}
+
+func TestResolveAvailablePackRejectsInvalidBundledVersion(t *testing.T) {
+	bundledDir := t.TempDir()
+	bundledPath := filepath.Join(bundledDir, packExecutableName(packID(TypeScript)))
+	if err := os.WriteFile(bundledPath, []byte("pack"), 0o755); err != nil {
+		t.Fatalf("WriteFile(bundled pack): %v", err)
+	}
+
+	if _, _, err := resolveAvailablePack(t.TempDir(), bundledDir, "latest", TypeScript); domain.CodeOf(err) != domain.CodeValidation {
+		t.Fatalf("resolveAvailablePack() error = %v, want validation", err)
+	}
+}

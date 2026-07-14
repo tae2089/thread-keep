@@ -89,7 +89,7 @@ record User(String name) {
 		"Utility":             "class",
 		"Utility.identity":    "method",
 	}
-	if got.Indexer.ID != "thread-keep-index-java" || got.Language != "java" || len(got.Entities) != len(want) {
+	if got.Indexer.ID != "thread-keep-index-java" || got.Indexer.Version != "dev" || got.Language != "java" || len(got.Entities) != len(want) {
 		t.Fatalf("response = %#v, want Java entities %#v", got, want)
 	}
 	for _, entity := range got.Entities {

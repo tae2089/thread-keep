@@ -1,6 +1,6 @@
 # Thread Keep
 
-Thread Keep is a local-first code-context VCS. It indexes Go functions, methods and types in the core, and can index TypeScript/TSX, JavaScript/JSX, Python, Java, Kotlin, and Rust through explicitly installed Thread Keep language packs. It stores context in the Git common directory and searches entities and ContextNotes with SQLite FTS5.
+Thread Keep is a local-first code-context VCS. It indexes Go functions, methods and types in the core, and can index TypeScript/TSX, JavaScript/JSX, Python, Java, Kotlin, and Rust through bundled or explicitly installed Thread Keep language packs. It stores context in the Git common directory and searches entities and ContextNotes with SQLite FTS5.
 
 ## Guides
 
@@ -9,7 +9,18 @@ Thread Keep is a local-first code-context VCS. It indexes Go functions, methods 
 - [Codex setup](docs/guides/codex.md) — MCP configuration and AGENTS.md instructions.
 - [Team server operations](docs/guides/team-server.md) — hosted context remote, GitHub authorization, clustering, maintenance, onboarding.
 - [PR context planning](docs/guides/pr-context-coordinator.md) — Server-owned durable webhook intake, dedicated coordinator and runner processes, Checks, landing, and recovery.
-- [Release operations](docs/guides/releases.md) — GitHub Actions, GoReleaser, signed pack assets, and npm binary publishing.
+- [Release operations](docs/guides/releases.md) — GitHub Actions, GoReleaser, signed pack assets, npm, PyPI, and container publishing.
+
+## Install from PyPI
+
+Published releases provide one platform wheel for Linux glibc x64/arm64, macOS x64/arm64, or Windows x64. The selected wheel contains `thread-keep`, `thread-keep-mcp`, and all six official language packs:
+
+```bash
+python3 -m pip install thread-keep
+thread-keep --help
+```
+
+The Python console scripts execute the packaged native binaries and expose the bundled pack directory only to that process. A pack installed later with `thread-keep indexers sync --detected [--version X.Y.Z]` is activated from the signed managed store and takes precedence over the wheel-bundled copy.
 
 ## Install from npm
 
@@ -273,7 +284,7 @@ Use a commit ID previously returned by `thread-keep commit` or `thread-keep log`
 
 ## TypeScript, JavaScript, Python, Java, Kotlin, and Rust packs
 
-The core automatically detects `.ts`, `.tsx`, `.mts`, `.cts`, `.js`, `.jsx`, `.mjs`, `.cjs`, `.py`, `.pyi`, `.pyw`, `.java`, `.kt`, `.kts`, and `.rs` files. It looks only in Go's user configuration directory (for example `$XDG_CONFIG_HOME/thread-keep/packs/thread-keep-index-typescript`, `$XDG_CONFIG_HOME/thread-keep/packs/thread-keep-index-javascript`, `$XDG_CONFIG_HOME/thread-keep/packs/thread-keep-index-python`, `$XDG_CONFIG_HOME/thread-keep/packs/thread-keep-index-java`, `$XDG_CONFIG_HOME/thread-keep/packs/thread-keep-index-kotlin`, and `$XDG_CONFIG_HOME/thread-keep/packs/thread-keep-index-rust` on Linux); `update` never downloads or installs a pack. Build all bundled packs explicitly with `make build-pack`, then place each executable at its fixed path.
+The core automatically detects `.ts`, `.tsx`, `.mts`, `.cts`, `.js`, `.jsx`, `.mjs`, `.cjs`, `.py`, `.pyi`, `.pyw`, `.java`, `.kt`, `.kts`, and `.rs` files. It first resolves packs from Go's user configuration directory. Release-managed packs use signed activation metadata plus immutable binaries under `thread-keep/packs/objects/`; manually built and container-provided packs remain compatible at fixed paths such as `$XDG_CONFIG_HOME/thread-keep/packs/thread-keep-index-typescript`. When invoked through the PyPI console script, a target-qualified bundled pack is the final fallback. `update` never downloads, installs, or upgrades a pack.
 
 Without a detected language's pack, Go remains searchable and `update` reports that language as `missing_pack`. Such a partial projection cannot become a context commit. Use `thread-keep update --require-complete` when automation must fail immediately on incomplete coverage.
 
@@ -283,7 +294,7 @@ Inspect the known built-in and official pack locations without initializing cont
 thread-keep indexers list
 ```
 
-The command reports whether each known indexer is built in, installed as an executable regular file at the fixed user-config path, or missing. It also marks the languages detected in the current repository.
+The command reports whether each known indexer is built in, installed, or missing and marks the languages detected in the current repository. A release-managed install also reports its signed release version, SHA-256, and resolved immutable path. Listing validates files but never launches a pack.
 
 ## Official pack installation and releases
 
@@ -293,7 +304,16 @@ Only a release binary built with the official manifest verification key can inst
 thread-keep indexers install --detected
 ```
 
-The installer downloads a signed manifest from the official GitHub Release origin, verifies its Ed25519 signature, selects the current GOOS/GOARCH asset, verifies its exact byte size and SHA-256, then publishes the executable atomically at the fixed user-config pack path. A development build without a release public key rejects installation before contacting the network or creating pack storage.
+The installer downloads a signed manifest from the official GitHub Release origin, verifies its Ed25519 signature, selects the current GOOS/GOARCH asset, verifies its exact byte size and SHA-256, publishes an immutable content-addressed executable, and atomically activates signed-manifest metadata. A development build without a release public key rejects installation before contacting the network or creating pack storage.
+
+Installation never replaces an existing usable pack. Synchronize every detected official pack explicitly when upgrading, pinning, or rolling back. Omitting `--version` selects the signed latest-release manifest; an exact version must be stable SemVer without the `v` prefix:
+
+```bash
+thread-keep indexers sync --detected
+thread-keep indexers sync --detected --version 1.2.3
+```
+
+A failed fetch, signature, size, digest, or activation check leaves the previous active metadata unchanged. Inactive immutable artifacts are retained; automatic pack garbage collection is not implemented.
 
 Release automation embeds a base64 Ed25519 public key only:
 

@@ -53,6 +53,17 @@ test("container GoReleaser config defines three dual-platform GHCR images", asyn
   assert.equal((config.match(/- linux\/arm64/g) || []).length, IMAGES.length);
 });
 
+test("all released pack binaries report the release SemVer", async () => {
+  for (const file of [".goreleaser.yaml", ".goreleaser.docker.yaml"]) {
+    const config = await readFile(file, "utf8");
+    assert.equal(
+      (config.match(/-X main\.indexerVersion=\{\{ \.Version \}\}/g) || []).length,
+      PACK_BINARIES.length,
+      `${file} must inject the version into every pack binary`,
+    );
+  }
+});
+
 test("tag workflow publishes containers after GitHub and npm artifacts", async () => {
   const workflow = await readFile(".github/workflows/release.yml", "utf8");
   assert.match(workflow, /^  containers:$/m);
@@ -60,6 +71,20 @@ test("tag workflow publishes containers after GitHub and npm artifacts", async (
   assert.match(workflow, /^      packages: write$/m);
   assert.match(workflow, /uses: docker\/login-action@v3/);
   assert.match(workflow, /release --clean --config \.goreleaser\.docker\.yaml/);
+});
+
+test("tag workflow publishes GoReleaser-derived wheels through PyPI Trusted Publishing", async () => {
+  const workflow = await readFile(".github/workflows/release.yml", "utf8");
+  assert.match(workflow, /python3 scripts\/release\/build_wheels\.py/);
+  assert.match(workflow, /name: pypi-wheels/);
+  assert.match(workflow, /^  pypi:$/m);
+  assert.match(workflow, /^    needs: publish$/m);
+  assert.match(workflow, /^      name: pypi$/m);
+  assert.match(workflow, /^      id-token: write$/m);
+  assert.match(workflow, /node scripts\/release\/verify-pypi\.mjs/);
+  assert.match(workflow, /uses: pypa\/gh-action-pypi-publish@release\/v1/);
+  assert.match(workflow, /^          packages-dir: release\/wheels\/$/m);
+  assert.match(workflow, /^          skip-existing: true$/m);
 });
 
 test("pull request CI validates the container GoReleaser config", async () => {

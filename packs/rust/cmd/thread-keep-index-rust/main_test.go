@@ -72,7 +72,7 @@ macro_rules! generated { () => { fn hidden() {} } }
 		"Value":                "type",
 		"tools.helper":         "function",
 	}
-	if got.Indexer.ID != "thread-keep-index-rust" || got.Language != "rust" || len(got.Entities) != len(want) {
+	if got.Indexer.ID != "thread-keep-index-rust" || got.Indexer.Version != "dev" || got.Language != "rust" || len(got.Entities) != len(want) {
 		t.Fatalf("response = %#v, want Rust entities %#v", got, want)
 	}
 	for _, entity := range got.Entities {

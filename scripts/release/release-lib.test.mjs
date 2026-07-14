@@ -214,3 +214,16 @@ test("validateSigningKeyPair rejects a public/private mismatch", () => {
     /manifest signing key pair does not match/,
   );
 });
+
+test("every native release target declares one platform wheel tag", () => {
+  assert.deepEqual(
+    TARGETS.map((target) => target.wheelTag),
+    [
+      "manylinux_2_39_x86_64",
+      "manylinux_2_39_aarch64",
+      "macosx_15_0_x86_64",
+      "macosx_15_0_arm64",
+      "win_amd64",
+    ],
+  );
+});

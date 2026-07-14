@@ -11,40 +11,26 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 
-export const CORE_BINARIES = Object.freeze([
-  "thread-keep",
-  "thread-keep-mcp",
-  "thread-keep-server",
-  "thread-keep-coordinator",
-  "thread-keep-runner",
-]);
+const releaseConfig = JSON.parse(
+  await readFile(new URL("./release-config.json", import.meta.url), "utf8"),
+);
 
-export const PACKS = Object.freeze([
-  { id: "thread-keep-index-typescript", language: "typescript" },
-  { id: "thread-keep-index-javascript", language: "javascript" },
-  { id: "thread-keep-index-python", language: "python" },
-  { id: "thread-keep-index-java", language: "java" },
-  { id: "thread-keep-index-kotlin", language: "kotlin" },
-  { id: "thread-keep-index-rust", language: "rust" },
-]);
+export const CORE_BINARIES = Object.freeze([...releaseConfig.core_binaries]);
+
+export const PACKS = Object.freeze(
+  releaseConfig.packs.map((pack) => Object.freeze({ ...pack })),
+);
 
 export const ALL_BINARIES = Object.freeze([
   ...CORE_BINARIES,
   ...PACKS.map((pack) => pack.id),
 ]);
 
-export const NPM_BINARIES = Object.freeze([
-  "thread-keep",
-  "thread-keep-mcp",
-]);
+export const NPM_BINARIES = Object.freeze([...releaseConfig.npm_binaries]);
 
-export const TARGETS = Object.freeze([
-  { id: "linux-x64", goos: "linux", goarch: "amd64", npmOS: "linux", npmCPU: "x64" },
-  { id: "linux-arm64", goos: "linux", goarch: "arm64", npmOS: "linux", npmCPU: "arm64" },
-  { id: "darwin-x64", goos: "darwin", goarch: "amd64", npmOS: "darwin", npmCPU: "x64" },
-  { id: "darwin-arm64", goos: "darwin", goarch: "arm64", npmOS: "darwin", npmCPU: "arm64" },
-  { id: "win32-x64", goos: "windows", goarch: "amd64", npmOS: "win32", npmCPU: "x64" },
-]);
+export const TARGETS = Object.freeze(
+  releaseConfig.targets.map((target) => Object.freeze({ ...target })),
+);
 
 export function validateSigningKeyPair(publicKeyBase64, privateKeyBase64) {
   const publicKey = Buffer.from(String(publicKeyBase64 || "").trim(), "base64");

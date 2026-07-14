@@ -80,6 +80,7 @@ builds:
       - -trimpath
     ldflags:
       - -s -w
+      - -X main.indexerVersion={{ .Version }}
 
   - id: thread-keep-index-javascript
     dir: packs/javascript
@@ -91,6 +92,7 @@ builds:
       - -trimpath
     ldflags:
       - -s -w
+      - -X main.indexerVersion={{ .Version }}
 
   - id: thread-keep-index-python
     dir: packs/python
@@ -102,6 +104,7 @@ builds:
       - -trimpath
     ldflags:
       - -s -w
+      - -X main.indexerVersion={{ .Version }}
 
   - id: thread-keep-index-java
     dir: packs/java
@@ -113,6 +116,7 @@ builds:
       - -trimpath
     ldflags:
       - -s -w
+      - -X main.indexerVersion={{ .Version }}
 
   - id: thread-keep-index-kotlin
     dir: packs/kotlin
@@ -124,6 +128,7 @@ builds:
       - -trimpath
     ldflags:
       - -s -w
+      - -X main.indexerVersion={{ .Version }}
 
   - id: thread-keep-index-rust
     dir: packs/rust
@@ -135,6 +140,7 @@ builds:
       - -trimpath
     ldflags:
       - -s -w
+      - -X main.indexerVersion={{ .Version }}
 
 release:
   disable: true

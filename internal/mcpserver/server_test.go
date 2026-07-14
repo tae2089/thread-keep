@@ -53,16 +53,11 @@ func newTestRepo(t *testing.T, initialize bool) string {
 	return repo
 }
 
-func startTestServer(t *testing.T, repo string) *testClient {
+func startTestServer(t *testing.T, defaultRepo string) *testClient {
 	t.Helper()
 	ctx := context.Background()
-	service, err := app.Open(ctx, repo)
-	if err != nil {
-		t.Fatalf("app.Open() error = %v", err)
-	}
-	t.Cleanup(func() { _ = service.Close() })
 	clientTransport, serverTransport := mcp.NewInMemoryTransports()
-	server := New(service)
+	server := New(defaultRepo)
 	serverSession, err := server.Connect(ctx, serverTransport, nil)
 	if err != nil {
 		t.Fatalf("Server.Connect() error = %v", err)
@@ -120,6 +115,50 @@ func TestListsAllToolsWithStableSchemas(t *testing.T) {
 	}
 	if strings.Contains(string(encoded), `"expand"`) || strings.Contains(string(encoded), `"applicability"`) {
 		t.Fatalf("ListTools() exposes removed relation inputs: %s", encoded)
+	}
+	if count := strings.Count(string(encoded), `"repo"`); count != len(result.Tools) {
+		t.Fatalf("ListTools() repo property count = %d, want %d: %s", count, len(result.Tools), encoded)
+	}
+}
+
+func TestToolsRouteExplicitRepoAheadOfDefault(t *testing.T) {
+	defaultRepo := newTestRepo(t, true)
+	explicitRepo := newTestRepo(t, true)
+	client := startTestServer(t, defaultRepo)
+
+	arguments := fmt.Sprintf(`{"repo":%q,"entity_key":"example.Run","kind":"decision","body":"explicit repository note"}`, explicitRepo)
+	if text, isError := client.callTool(t, "note_add", arguments); isError || !strings.Contains(text, "explicit repository note") {
+		t.Fatalf("note_add(explicit repo) = %q (isError=%v)", text, isError)
+	}
+	if text, isError := client.callTool(t, "status", `{}`); isError || !strings.Contains(text, `"pending_notes":0`) {
+		t.Fatalf("status(default repo) = %q (isError=%v), want no pending notes", text, isError)
+	}
+	arguments = fmt.Sprintf(`{"repo":%q}`, explicitRepo)
+	if text, isError := client.callTool(t, "status", arguments); isError || !strings.Contains(text, `"pending_notes":1`) {
+		t.Fatalf("status(explicit repo) = %q (isError=%v), want one pending note", text, isError)
+	}
+}
+
+func TestToolsRequireRepoWithoutDefault(t *testing.T) {
+	repo := newTestRepo(t, true)
+	client := startTestServer(t, "")
+
+	if text, isError := client.callTool(t, "status", `{}`); !isError || !strings.Contains(text, `"code":"validation"`) {
+		t.Fatalf("status(no repo) = %q (isError=%v), want validation", text, isError)
+	}
+	arguments := fmt.Sprintf(`{"repo":%q}`, repo)
+	if text, isError := client.callTool(t, "status", arguments); isError || !strings.Contains(text, `"pending_notes":0`) {
+		t.Fatalf("status(explicit repo) = %q (isError=%v), want initialized repository status", text, isError)
+	}
+}
+
+func TestToolsDoNotFallbackFromInvalidExplicitRepo(t *testing.T) {
+	defaultRepo := newTestRepo(t, true)
+	client := startTestServer(t, defaultRepo)
+	arguments := fmt.Sprintf(`{"repo":%q}`, t.TempDir())
+
+	if text, isError := client.callTool(t, "status", arguments); !isError || !strings.Contains(text, `"code":"repository_state"`) {
+		t.Fatalf("status(invalid explicit repo) = %q (isError=%v), want repository_state", text, isError)
 	}
 }
 

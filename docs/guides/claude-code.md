@@ -33,8 +33,12 @@ rely on cross-language search (see the README pack sections). Go is always index
 Code:
 
 ```bash
-claude mcp add thread-keep -- thread-keep-mcp --repo /path/to/repo
+claude mcp add thread-keep -- thread-keep-mcp
 ```
+
+Every tool accepts an optional `repo` worktree path. If one repository should be
+the default, append `--repo /path/to/repo`; an explicit tool-call `repo` always
+overrides that default.
 
 Alternatively, commit a project-scoped `.mcp.json` at the repo root so every collaborator
 gets the same server:
@@ -50,10 +54,11 @@ gets the same server:
 }
 ```
 
-### The 7 tools
+### The 10 tools
 
-The server exposes exactly seven tools. Five are read-only and return the same JSON
-structures as the CLI; two are writes.
+The server exposes exactly ten tools. Eight are read-only and return the same JSON
+structures as the CLI; two are writes. Every tool accepts optional `repo`, which
+is required at call time when the server has no `--repo` default.
 
 **Read**
 
@@ -61,6 +66,9 @@ structures as the CLI; two are writes.
 | --- | --- |
 | `search` | Search indexed code entities and committed notes with lexical evidence (requires `query`). |
 | `context_get` | Read the active context notes bound to one `entity_key`. |
+| `context_for_change` | Assemble bounded context for changes since an immutable context snapshot. |
+| `context_for_entity` | Assemble bounded current or historical context for one `entity_key`. |
+| `context_query` | Assemble bounded context from lexical entity and note evidence. |
 | `related_context` | Bounded one-hop structural view: owner type and same-file entities only. No call, import, or impact edges. |
 | `status` | Working-set status: pending notes, coverage, source state. |
 | `diff` | All pending context changes awaiting an explicit human commit. |
@@ -209,9 +217,13 @@ thread-keep note review <note-id> --entity <current-entity-key>
 
 ## 7. Troubleshooting
 
-**MCP server exits immediately.** `thread-keep-mcp` must point at a Git repository. Check
-that `--repo` is a real repo and the path is correct; a non-repo or wrong path causes an
-immediate exit.
+**Tools return `validation: repo is required when --repo is not set`.** Pass an
+absolute Git worktree path as the tool's `repo`, or register the server with a
+`--repo` default.
+
+**Tools return `repository_state`.** The selected tool-call `repo` (or `--repo`
+default) is not a Git worktree. An explicit tool-call path does not fall back to
+the process default.
 
 **Tools return `not_initialized`.** Context storage does not exist yet. Run
 `thread-keep init`, then `thread-keep update` (after committing source), in the repo.

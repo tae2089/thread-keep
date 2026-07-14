@@ -38,7 +38,7 @@ func run(arguments []string) error {
 	}
 
 	ctx := context.Background()
-	command := exec.CommandContext(ctx, configuration.server, "--repo", configuration.repo)
+	command := exec.CommandContext(ctx, configuration.server)
 	command.Stderr = os.Stderr
 	client := mcp.NewClient(&mcp.Implementation{Name: "thread-keep-e2e", Version: "0"}, nil)
 	session, err := client.Connect(ctx, &mcp.CommandTransport{Command: command}, nil)
@@ -61,6 +61,7 @@ func run(arguments []string) error {
 	result, err := session.CallTool(ctx, &mcp.CallToolParams{
 		Name: "note_add",
 		Arguments: map[string]any{
+			"repo":       configuration.repo,
 			"entity_key": "sample.Run",
 			"kind":       "intent",
 			"body":       "drafted through mcp",

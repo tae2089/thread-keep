@@ -21,15 +21,18 @@ Codex reads MCP servers from `~/.codex/config.toml`. Add a `[mcp_servers.<name>]
 ```toml
 [mcp_servers.thread-keep]
 command = "thread-keep-mcp"
-args = ["--repo", "/absolute/path/to/repo"]
 ```
 
-Use an absolute path for `--repo` so the server binds to the right worktree regardless of where Codex launches it. If `thread-keep-mcp` is not on `PATH`, set `command` to its absolute path.
+Every tool accepts a `repo` argument. Use an absolute worktree path so the call
+does not depend on where Codex launches the MCP server. If one repository should
+be the default, add `args = ["--repo", "/absolute/path/to/repo"]`; an explicit
+tool-call `repo` overrides that default. If `thread-keep-mcp` is not on `PATH`,
+set `command` to its absolute path.
 
 If your Codex version ships the CLI shortcut, this registers the same server:
 
 ```bash
-codex mcp add thread-keep -- thread-keep-mcp --repo .
+codex mcp add thread-keep -- thread-keep-mcp
 ```
 
 Codex configuration syntax evolves between releases; if the snippet above does not match your version, check `codex mcp --help` and the official Codex docs rather than guessing other options.
@@ -38,7 +41,8 @@ The server speaks the Model Context Protocol over stdio. On startup it logs `thr
 
 ## Tool surface and safety model
 
-Thread Keep exposes exactly seven tools.
+Thread Keep exposes exactly ten tools. Every tool accepts optional `repo`; it is
+required at call time when the server has no `--repo` default.
 
 **Read tools** (return the same JSON structures as the CLI):
 
@@ -46,6 +50,9 @@ Thread Keep exposes exactly seven tools.
 | --- | --- |
 | `search` | Search indexed code entities and committed context notes with lexical evidence. Argument: `query`. |
 | `context_get` | Read the active context notes bound to one entity key. Argument: `entity_key`. |
+| `context_for_change` | Assemble bounded context for changes since an immutable context snapshot. |
+| `context_for_entity` | Assemble bounded current or historical context for one entity. Argument: `entity_key`. |
+| `context_query` | Assemble bounded context from lexical entity and note evidence. Argument: `query`. |
 | `related_context` | Bounded one-hop structural view: the entity's owner type and same-file entities only. Never call, import, or impact edges. Arguments: `entity_key`, optional `limit` (default 20, max 100). |
 | `status` | Working-set status: pending notes, coverage, and source state. No arguments. |
 | `diff` | All pending context changes awaiting an explicit human commit. No arguments. |
@@ -73,6 +80,8 @@ Add this to your project's `AGENTS.md` so Codex uses Thread Keep consistently:
 
 - Before editing an unfamiliar function, type, or method, consult `search` and
   `context_get` to read the durable context already recorded for that entity.
+- Pass this repository's absolute worktree path as `repo` to every Thread Keep
+  tool call unless the MCP server was registered with this repository as `--repo`.
 - At decision time, draft evidence-backed notes via `note_add`. Pick the kind
   that fits: `intent`, `decision`, `constraint`, `example`, or `warning`. Every
   note body must cite its evidence — the diff, a test, an issue, or an explicit
@@ -110,6 +119,7 @@ thread-keep note review <note-id> --entity <current-entity-key>
 
 ## Troubleshooting
 
-- **The server exits immediately / Codex reports the MCP server failed to start.** `thread-keep-mcp` calls `app.Open` before serving, so a bad `--repo` fails fast. Check that `--repo` points at a real Git worktree (an absolute path), and that the directory is actually a Git repository.
+- **`validation: repo is required when --repo is not set`.** Pass an absolute Git worktree path as the tool's `repo`, or register the server with a `--repo` default.
+- **`repository_state` error.** The selected tool-call `repo` (or `--repo` default) is not a Git worktree. An explicit tool-call `repo` never falls back to the process default.
 - **`not_initialized` error.** The repository has no Thread Keep context storage yet. Run `thread-keep init` (then `thread-keep update`) in that repo.
 - **`entity_not_found` error.** The `entity_key` you passed to `context_get`, `related_context`, or `note_add` does not match an indexed entity. Run `search` first to find the exact entity key, then retry with that key. If the entity is new, run `thread-keep update` (on a clean, committed worktree) so it gets indexed.

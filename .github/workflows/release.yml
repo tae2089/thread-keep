@@ -1,0 +1,319 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Validate release tag and repository
+        shell: bash
+        run: |
+          [[ "$GITHUB_REF_NAME" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          [[ "$GITHUB_REPOSITORY" == "tae2089/thread-keep" ]]
+          test -f LICENSE
+
+      - name: Verify source and release tooling
+        run: |
+          make test
+          make vet
+          make build
+          make release-test
+          make e2e
+
+      - name: Check GoReleaser configuration
+        run: |
+          npm_config_cache="$RUNNER_TEMP/npm-cache" npx --yes @goreleaser/goreleaser@2.17.0 check
+          npm_config_cache="$RUNNER_TEMP/npm-cache" npx --yes @goreleaser/goreleaser@2.17.0 check --config .goreleaser.docker.yaml
+
+      - name: Lint GitHub Actions workflows
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+
+  build:
+    needs: verify
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: linux-x64
+            goos: linux
+            goarch: amd64
+          - runner: ubuntu-24.04-arm
+            target: linux-arm64
+            goos: linux
+            goarch: arm64
+          - runner: macos-15-intel
+            target: darwin-x64
+            goos: darwin
+            goarch: amd64
+          - runner: macos-15
+            target: darwin-arm64
+            goos: darwin
+            goarch: arm64
+          - runner: windows-2025
+            target: win32-x64
+            goos: windows
+            goarch: amd64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Install MinGW
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install mingw --no-progress -y
+          where.exe gcc
+
+      - name: Validate manifest public key
+        shell: bash
+        env:
+          THREAD_KEEP_MANIFEST_PUBLIC_KEY_B64: ${{ vars.THREAD_KEEP_MANIFEST_PUBLIC_KEY_B64 }}
+        run: |
+          test -n "$THREAD_KEEP_MANIFEST_PUBLIC_KEY_B64"
+          node -e 'const key=Buffer.from(process.env.THREAD_KEEP_MANIFEST_PUBLIC_KEY_B64,"base64"); if(key.length!==32) process.exit(1)'
+
+      - name: Build native target with GoReleaser
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: v2.17.0
+          args: build --single-target --clean --snapshot
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          THREAD_KEEP_MANIFEST_PUBLIC_KEY_B64: ${{ vars.THREAD_KEEP_MANIFEST_PUBLIC_KEY_B64 }}
+
+      - name: Stage target-qualified assets
+        shell: bash
+        run: node scripts/release/stage-target.mjs --dist=dist --out=release-staging --target=${{ matrix.target }}
+
+      - name: Upload native assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: release-staging/*
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    environment: npm
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Node.js for npm publishing
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Download native assets
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: release-staging
+          merge-multiple: true
+
+      - name: Derive release version
+        id: release
+        shell: bash
+        run: |
+          [[ "$GITHUB_REF_NAME" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Assemble release and npm packages
+        run: >-
+          node scripts/release/assemble-release.mjs
+          --artifacts=release-staging
+          --license=LICENSE
+          --meta=npm/thread-keep
+          --out=release
+          --repository=${{ github.repository }}
+          --tag=${{ github.ref_name }}
+          --version=${{ steps.release.outputs.version }}
+
+      - name: Validate signing key pair and sign pack manifest
+        shell: bash
+        env:
+          THREAD_KEEP_MANIFEST_PUBLIC_KEY_B64: ${{ vars.THREAD_KEEP_MANIFEST_PUBLIC_KEY_B64 }}
+          THREAD_KEEP_MANIFEST_PRIVATE_KEY_B64: ${{ secrets.THREAD_KEEP_MANIFEST_PRIVATE_KEY_B64 }}
+        run: |
+          set -euo pipefail
+          node scripts/release/validate-key-pair.mjs
+          key_file="$RUNNER_TEMP/thread-keep-manifest-private-key"
+          trap 'rm -f "$key_file"' EXIT
+          umask 077
+          printf '%s' "$THREAD_KEEP_MANIFEST_PRIVATE_KEY_B64" > "$key_file"
+          go run ./cmd/thread-keep-sign-manifest -- \
+            --payload release/assets/thread-keep-indexers-manifest-v1.payload.json \
+            --private-key "$key_file" \
+            > release/assets/thread-keep-indexers-manifest-v1.json
+          rm release/assets/thread-keep-indexers-manifest-v1.payload.json
+          sha256sum release/assets/thread-keep-indexers-manifest-v1.json \
+            | sed 's#  release/assets/#  #' \
+            >> release/assets/checksums.txt
+
+      - name: Validate npm tarballs
+        shell: bash
+        run: |
+          set -euo pipefail
+          for package_dir in release/npm/thread-keep-*; do
+            npm pack "./$package_dir" --dry-run --json >/dev/null
+          done
+          npm pack ./release/npm/thread-keep --dry-run --json >/dev/null
+
+      - name: Publish or verify GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view "${{ github.ref_name }}" >/dev/null 2>&1; then
+            published="$RUNNER_TEMP/published-release"
+            mkdir -p "$published"
+            gh release download "${{ github.ref_name }}" --dir "$published"
+            find release/assets -maxdepth 1 -type f -exec basename {} \; | sort > "$RUNNER_TEMP/local-assets"
+            find "$published" -maxdepth 1 -type f -exec basename {} \; | sort > "$RUNNER_TEMP/published-assets"
+            cmp "$RUNNER_TEMP/local-assets" "$RUNNER_TEMP/published-assets"
+            cmp release/assets/checksums.txt "$published/checksums.txt"
+            (cd "$published" && sha256sum --check checksums.txt)
+          else
+            gh release create "${{ github.ref_name }}" \
+              release/assets/* \
+              --verify-tag \
+              --generate-notes \
+              --title "${{ github.ref_name }}"
+          fi
+
+      - name: Publish or verify npm packages
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          publish_or_verify() {
+            package_dir="$1"
+            package_json="$(npm pack "./$package_dir" --dry-run --json)"
+            local_integrity="$(node -e 'console.log(JSON.parse(process.argv[1])[0].integrity)' "$package_json")"
+            package_name="$(node -p "require('./$package_dir/package.json').name")"
+            package_version="$(node -p "require('./$package_dir/package.json').version")"
+            if remote_json="$(npm view "$package_name@$package_version" dist.integrity --json 2>/dev/null)"; then
+              remote_integrity="$(node -e 'console.log(JSON.parse(process.argv[1]))' "$remote_json")"
+              if [[ "$local_integrity" != "$remote_integrity" ]]; then
+                echo "published npm integrity differs for $package_name@$package_version" >&2
+                return 1
+              fi
+              echo "verified existing $package_name@$package_version"
+              return 0
+            fi
+            npm publish "./$package_dir" --access public --provenance
+          }
+          for package_dir in release/npm/thread-keep-*; do
+            publish_or_verify "$package_dir"
+          done
+          publish_or_verify release/npm/thread-keep
+
+  containers:
+    needs: publish
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install CGO cross-compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+          gcc --version
+          aarch64-linux-gnu-gcc --version
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish container images with GoReleaser
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: v2.17.0
+          args: release --clean --config .goreleaser.docker.yaml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

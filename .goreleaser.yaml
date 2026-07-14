@@ -1,0 +1,140 @@
+version: 2
+
+project_name: thread-keep
+dist: dist
+
+builds:
+  - id: thread-keep
+    main: ./cmd/thread-keep
+    binary: thread-keep
+    env:
+      - CGO_ENABLED=1
+    flags:
+      - -trimpath
+    tags:
+      - sqlite_fts5
+      - sqlite_omit_load_extension
+    ldflags:
+      - -s -w
+      - -X github.com/tae2089/thread-keep/internal/indexing.officialManifestPublicKeyBase64={{ .Env.THREAD_KEEP_MANIFEST_PUBLIC_KEY_B64 }}
+
+  - id: thread-keep-mcp
+    main: ./cmd/thread-keep-mcp
+    binary: thread-keep-mcp
+    env:
+      - CGO_ENABLED=1
+    flags:
+      - -trimpath
+    tags:
+      - sqlite_fts5
+      - sqlite_omit_load_extension
+    ldflags:
+      - -s -w
+
+  - id: thread-keep-server
+    main: ./cmd/thread-keep-server
+    binary: thread-keep-server
+    env:
+      - CGO_ENABLED=1
+    flags:
+      - -trimpath
+    tags:
+      - sqlite_fts5
+      - sqlite_omit_load_extension
+    ldflags:
+      - -s -w
+
+  - id: thread-keep-coordinator
+    main: ./cmd/thread-keep-coordinator
+    binary: thread-keep-coordinator
+    env:
+      - CGO_ENABLED=1
+    flags:
+      - -trimpath
+    tags:
+      - sqlite_fts5
+      - sqlite_omit_load_extension
+    ldflags:
+      - -s -w
+
+  - id: thread-keep-runner
+    main: ./cmd/thread-keep-runner
+    binary: thread-keep-runner
+    env:
+      - CGO_ENABLED=1
+    flags:
+      - -trimpath
+    tags:
+      - sqlite_fts5
+      - sqlite_omit_load_extension
+    ldflags:
+      - -s -w
+
+  - id: thread-keep-index-typescript
+    dir: packs/typescript
+    main: ./cmd/thread-keep-index-typescript
+    binary: thread-keep-index-typescript
+    env:
+      - CGO_ENABLED=1
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+
+  - id: thread-keep-index-javascript
+    dir: packs/javascript
+    main: ./cmd/thread-keep-index-javascript
+    binary: thread-keep-index-javascript
+    env:
+      - CGO_ENABLED=1
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+
+  - id: thread-keep-index-python
+    dir: packs/python
+    main: ./cmd/thread-keep-index-python
+    binary: thread-keep-index-python
+    env:
+      - CGO_ENABLED=1
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+
+  - id: thread-keep-index-java
+    dir: packs/java
+    main: ./cmd/thread-keep-index-java
+    binary: thread-keep-index-java
+    env:
+      - CGO_ENABLED=1
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+
+  - id: thread-keep-index-kotlin
+    dir: packs/kotlin
+    main: ./cmd/thread-keep-index-kotlin
+    binary: thread-keep-index-kotlin
+    env:
+      - CGO_ENABLED=1
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+
+  - id: thread-keep-index-rust
+    dir: packs/rust
+    main: ./cmd/thread-keep-index-rust
+    binary: thread-keep-index-rust
+    env:
+      - CGO_ENABLED=1
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+
+release:
+  disable: true

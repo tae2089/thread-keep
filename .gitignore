@@ -1,0 +1,25 @@
+# OS metadata
+.DS_Store
+
+# Local environment overrides
+.env
+.env.*
+!.env.example
+
+# Build output
+/bin/
+/dist/
+/dist-containers/
+/release/
+/release-staging/
+
+# Node.js tooling
+node_modules/
+npm-debug.log*
+
+# Local agent and task state
+/.agent-team/
+/_workspace/
+
+# Legacy repository-local database path
+/.db

@@ -1,0 +1,244 @@
+version: 2
+
+project_name: thread-keep-containers
+dist: dist-containers
+
+builds:
+  - id: container-server
+    main: ./cmd/thread-keep-server
+    binary: thread-keep-server
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=1
+      - 'CC={{ if eq .Arch "arm64" }}aarch64-linux-gnu-gcc{{ else }}gcc{{ end }}'
+    flags:
+      - -trimpath
+    tags:
+      - sqlite_fts5
+      - sqlite_omit_load_extension
+    ldflags:
+      - -s -w
+
+  - id: container-coordinator
+    main: ./cmd/thread-keep-coordinator
+    binary: thread-keep-coordinator
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=1
+      - 'CC={{ if eq .Arch "arm64" }}aarch64-linux-gnu-gcc{{ else }}gcc{{ end }}'
+    flags:
+      - -trimpath
+    tags:
+      - sqlite_fts5
+      - sqlite_omit_load_extension
+    ldflags:
+      - -s -w
+
+  - id: container-runner
+    main: ./cmd/thread-keep-runner
+    binary: thread-keep-runner
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=1
+      - 'CC={{ if eq .Arch "arm64" }}aarch64-linux-gnu-gcc{{ else }}gcc{{ end }}'
+    flags:
+      - -trimpath
+    tags:
+      - sqlite_fts5
+      - sqlite_omit_load_extension
+    ldflags:
+      - -s -w
+
+  - id: container-index-typescript
+    dir: packs/typescript
+    main: ./cmd/thread-keep-index-typescript
+    binary: thread-keep-index-typescript
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=1
+      - 'CC={{ if eq .Arch "arm64" }}aarch64-linux-gnu-gcc{{ else }}gcc{{ end }}'
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+
+  - id: container-index-javascript
+    dir: packs/javascript
+    main: ./cmd/thread-keep-index-javascript
+    binary: thread-keep-index-javascript
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=1
+      - 'CC={{ if eq .Arch "arm64" }}aarch64-linux-gnu-gcc{{ else }}gcc{{ end }}'
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+
+  - id: container-index-python
+    dir: packs/python
+    main: ./cmd/thread-keep-index-python
+    binary: thread-keep-index-python
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=1
+      - 'CC={{ if eq .Arch "arm64" }}aarch64-linux-gnu-gcc{{ else }}gcc{{ end }}'
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+
+  - id: container-index-java
+    dir: packs/java
+    main: ./cmd/thread-keep-index-java
+    binary: thread-keep-index-java
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=1
+      - 'CC={{ if eq .Arch "arm64" }}aarch64-linux-gnu-gcc{{ else }}gcc{{ end }}'
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+
+  - id: container-index-kotlin
+    dir: packs/kotlin
+    main: ./cmd/thread-keep-index-kotlin
+    binary: thread-keep-index-kotlin
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=1
+      - 'CC={{ if eq .Arch "arm64" }}aarch64-linux-gnu-gcc{{ else }}gcc{{ end }}'
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+
+  - id: container-index-rust
+    dir: packs/rust
+    main: ./cmd/thread-keep-index-rust
+    binary: thread-keep-index-rust
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=1
+      - 'CC={{ if eq .Arch "arm64" }}aarch64-linux-gnu-gcc{{ else }}gcc{{ end }}'
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+
+dockers_v2:
+  - id: image-server
+    dockerfile: Dockerfile.goreleaser.server
+    ids:
+      - container-server
+    images:
+      - ghcr.io/tae2089/thread-keep-server
+    tags:
+      - "{{ .Version }}"
+      - latest
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    labels:
+      org.opencontainers.image.source: https://github.com/tae2089/thread-keep
+      org.opencontainers.image.licenses: MIT
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.title: thread-keep-server
+
+  - id: image-coordinator
+    dockerfile: Dockerfile.goreleaser.coordinator
+    ids:
+      - container-coordinator
+      - container-runner
+      - container-index-typescript
+      - container-index-javascript
+      - container-index-python
+      - container-index-java
+      - container-index-kotlin
+      - container-index-rust
+    images:
+      - ghcr.io/tae2089/thread-keep-coordinator
+    tags:
+      - "{{ .Version }}"
+      - latest
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    labels:
+      org.opencontainers.image.source: https://github.com/tae2089/thread-keep
+      org.opencontainers.image.licenses: MIT
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.title: thread-keep-coordinator
+
+  - id: image-runner
+    dockerfile: Dockerfile.goreleaser.runner
+    ids:
+      - container-runner
+      - container-index-typescript
+      - container-index-javascript
+      - container-index-python
+      - container-index-java
+      - container-index-kotlin
+      - container-index-rust
+    images:
+      - ghcr.io/tae2089/thread-keep-runner
+    tags:
+      - "{{ .Version }}"
+      - latest
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    labels:
+      org.opencontainers.image.source: https://github.com/tae2089/thread-keep
+      org.opencontainers.image.licenses: MIT
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.title: thread-keep-runner
+
+checksum:
+  disable: true
+
+changelog:
+  disable: true
+
+release:
+  disable: true

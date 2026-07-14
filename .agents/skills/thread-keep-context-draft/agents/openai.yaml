@@ -1,0 +1,4 @@
+interface:
+  display_name: "Thread Keep Context Draft"
+  short_description: "Create evidence-backed pending context notes"
+  default_prompt: "Use $thread-keep-context-draft to create evidence-backed pending notes for this change."

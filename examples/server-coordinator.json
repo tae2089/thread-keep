@@ -1,0 +1,32 @@
+{
+  "github_api_base_url": "https://api.github.com",
+  "github_app": {
+    "app_id": 12345,
+    "installation_id": 67890
+  },
+  "runner": {
+    "backend": "process",
+    "timeout_seconds": 120,
+    "reconcile_interval_seconds": 30,
+    "process": {
+      "path": "/usr/local/bin/thread-keep-runner"
+    }
+  },
+  "repositories": {
+    "my-repo": {
+      "github_owner": "acme",
+      "github_repo": "service",
+      "context_repository_id": "git-roots:replace-with-repository-id",
+      "planning": {
+        "enabled": true,
+        "target_branches": [
+          "main"
+        ],
+        "check_mode": "informational",
+        "automatic_landing": false,
+        "context_schema": 4,
+        "max_attempts": 3
+      }
+    }
+  }
+}

@@ -1,0 +1,30 @@
+# syntax=docker/dockerfile:1.7
+
+FROM golang:1.25-bookworm AS build
+
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
+
+COPY cmd/thread-keep-server ./cmd/thread-keep-server
+COPY internal ./internal
+
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=1 go build -trimpath \
+    -tags 'sqlite_fts5 sqlite_omit_load_extension' \
+    -o /out/thread-keep-server ./cmd/thread-keep-server \
+    && install --directory --owner=65532 --group=65532 /out/storage
+
+FROM gcr.io/distroless/base-debian12:nonroot
+
+COPY --from=build /out/thread-keep-server /usr/local/bin/thread-keep-server
+COPY --from=build --chown=65532:65532 /out/storage/ /var/lib/thread-keep/
+
+USER 65532:65532
+
+EXPOSE 8320
+
+ENTRYPOINT ["/usr/local/bin/thread-keep-server"]

@@ -1,0 +1,34 @@
+# Repository and local workflow metadata
+.git
+.gitignore
+.dockerignore
+.github
+.DS_Store
+**/.DS_Store
+.agent-team
+.agents
+_workspace
+
+# Local configuration and generated output
+.env
+.env.*
+bin
+dist
+dist-containers
+release
+release-staging
+node_modules
+npm
+scripts
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# Files that are not Docker build inputs
+docs
+examples
+prompts
+*.md

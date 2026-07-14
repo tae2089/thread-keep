@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Test Go modules
+        run: make test
+
+      - name: Vet Go modules
+        run: make vet
+
+      - name: Build runtime binaries
+        run: make build
+
+      - name: Test release tooling
+        run: make release-test
+
+      - name: Check GoReleaser configuration
+        run: |
+          npm_config_cache="$RUNNER_TEMP/npm-cache" npx --yes @goreleaser/goreleaser@2.17.0 check
+          npm_config_cache="$RUNNER_TEMP/npm-cache" npx --yes @goreleaser/goreleaser@2.17.0 check --config .goreleaser.docker.yaml
+
+      - name: Lint GitHub Actions workflows
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+
+  e2e:
+    needs: quality
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Run Docker E2E
+        run: make e2e

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Thread Keep Context Review"
+  short_description: "Review code against durable design context"
+  default_prompt: "Use $thread-keep-context-review to review this change against active Thread Keep context."

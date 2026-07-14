@@ -1,0 +1,58 @@
+# syntax=docker/dockerfile:1.7
+
+FROM golang:1.25-bookworm AS build
+
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
+
+COPY packs/typescript/go.mod packs/typescript/go.sum ./packs/typescript/
+COPY packs/javascript/go.mod packs/javascript/go.sum ./packs/javascript/
+COPY packs/python/go.mod packs/python/go.sum ./packs/python/
+COPY packs/java/go.mod packs/java/go.sum ./packs/java/
+COPY packs/kotlin/go.mod packs/kotlin/go.sum ./packs/kotlin/
+COPY packs/rust/go.mod packs/rust/go.sum ./packs/rust/
+RUN --mount=type=cache,target=/go/pkg/mod \
+    set -eu; \
+    for language in typescript javascript python java kotlin rust; do \
+        (cd "packs/${language}" && go mod download); \
+    done
+
+COPY cmd/thread-keep-runner ./cmd/thread-keep-runner
+COPY internal ./internal
+COPY packs ./packs
+
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=1 go build -trimpath \
+    -tags 'sqlite_fts5 sqlite_omit_load_extension' \
+    -o /out/thread-keep-runner ./cmd/thread-keep-runner
+
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    set -eu; \
+    for language in typescript javascript python java kotlin rust; do \
+        (cd "packs/${language}" && CGO_ENABLED=1 go build -trimpath \
+            -o "/out/packs/thread-keep-index-${language}" \
+            "./cmd/thread-keep-index-${language}"); \
+    done
+
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends ca-certificates git \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 65532 thread-keep \
+    && useradd --uid 65532 --gid 65532 --create-home \
+       --home-dir /home/thread-keep --shell /usr/sbin/nologin thread-keep
+
+ENV HOME=/home/thread-keep
+
+COPY --from=build /out/thread-keep-runner /usr/local/bin/thread-keep-runner
+COPY --from=build --chown=65532:65532 /out/packs/ /home/thread-keep/.config/thread-keep/packs/
+
+USER 65532:65532
+
+ENTRYPOINT ["/usr/local/bin/thread-keep-runner"]

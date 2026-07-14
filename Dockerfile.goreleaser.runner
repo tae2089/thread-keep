@@ -1,0 +1,28 @@
+# syntax=docker/dockerfile:1.7
+
+FROM debian:bookworm-slim
+
+ARG TARGETPLATFORM
+
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends ca-certificates git \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 65532 thread-keep \
+    && useradd --uid 65532 --gid 65532 --create-home \
+       --home-dir /home/thread-keep --shell /usr/sbin/nologin thread-keep \
+    && install --directory --owner=65532 --group=65532 /var/lib/thread-keep \
+       /home/thread-keep/.config/thread-keep/packs
+
+ENV HOME=/home/thread-keep
+
+COPY $TARGETPLATFORM/thread-keep-runner /usr/local/bin/thread-keep-runner
+COPY --chown=65532:65532 $TARGETPLATFORM/thread-keep-index-typescript /home/thread-keep/.config/thread-keep/packs/thread-keep-index-typescript
+COPY --chown=65532:65532 $TARGETPLATFORM/thread-keep-index-javascript /home/thread-keep/.config/thread-keep/packs/thread-keep-index-javascript
+COPY --chown=65532:65532 $TARGETPLATFORM/thread-keep-index-python /home/thread-keep/.config/thread-keep/packs/thread-keep-index-python
+COPY --chown=65532:65532 $TARGETPLATFORM/thread-keep-index-java /home/thread-keep/.config/thread-keep/packs/thread-keep-index-java
+COPY --chown=65532:65532 $TARGETPLATFORM/thread-keep-index-kotlin /home/thread-keep/.config/thread-keep/packs/thread-keep-index-kotlin
+COPY --chown=65532:65532 $TARGETPLATFORM/thread-keep-index-rust /home/thread-keep/.config/thread-keep/packs/thread-keep-index-rust
+
+USER 65532:65532
+
+ENTRYPOINT ["/usr/local/bin/thread-keep-runner"]

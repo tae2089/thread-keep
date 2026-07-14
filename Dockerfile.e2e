@@ -1,0 +1,47 @@
+FROM golang:1.25-bookworm
+
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends build-essential git \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /workspace
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . ./
+RUN chmod +x e2e/run.sh \
+    && CGO_ENABLED=1 go build -trimpath -tags 'sqlite_fts5 sqlite_omit_load_extension' -o /usr/local/bin/thread-keep ./cmd/thread-keep \
+    && CGO_ENABLED=1 go build -trimpath -tags 'sqlite_fts5 sqlite_omit_load_extension' -o /usr/local/bin/thread-keep-server ./cmd/thread-keep-server \
+    && CGO_ENABLED=1 go build -trimpath -tags 'sqlite_fts5 sqlite_omit_load_extension' -o /usr/local/bin/thread-keep-mcp ./cmd/thread-keep-mcp \
+    && CGO_ENABLED=1 go build -trimpath -tags 'sqlite_fts5 sqlite_omit_load_extension' -o /usr/local/bin/thread-keep-runner ./cmd/thread-keep-runner \
+    && CGO_ENABLED=0 go build -trimpath -o /usr/local/bin/thread-keep-e2e-fakegithub ./e2e/fakegithub \
+    && CGO_ENABLED=0 go build -trimpath -o /usr/local/bin/thread-keep-e2e-mcpclient ./e2e/mcpclient \
+    && mkdir -p /root/.config/thread-keep/packs \
+    && cd packs/typescript \
+    && CGO_ENABLED=1 go build -trimpath -o /root/.config/thread-keep/packs/thread-keep-index-typescript ./cmd/thread-keep-index-typescript \
+    && cd ../javascript \
+    && CGO_ENABLED=1 go build -trimpath -o /root/.config/thread-keep/packs/thread-keep-index-javascript ./cmd/thread-keep-index-javascript \
+    && cd ../python \
+    && CGO_ENABLED=1 go build -trimpath -o /root/.config/thread-keep/packs/thread-keep-index-python ./cmd/thread-keep-index-python \
+    && cd ../java \
+    && CGO_ENABLED=1 go build -trimpath -o /root/.config/thread-keep/packs/thread-keep-index-java ./cmd/thread-keep-index-java \
+    && cd ../kotlin \
+    && CGO_ENABLED=1 go build -trimpath -o /root/.config/thread-keep/packs/thread-keep-index-kotlin ./cmd/thread-keep-index-kotlin \
+    && cd ../rust \
+    && CGO_ENABLED=1 go build -trimpath -o /root/.config/thread-keep/packs/thread-keep-index-rust ./cmd/thread-keep-index-rust \
+    && mkdir -p /opt/thread-keep-fixture \
+    && git -C /opt/thread-keep-fixture init --quiet \
+    && git -C /opt/thread-keep-fixture config user.name 'Thread Keep E2E' \
+    && git -C /opt/thread-keep-fixture config user.email 'e2e@thread-keep.invalid' \
+    && printf 'package fixture\n\nfunc Stable() string { return "fixture" }\n' > /opt/thread-keep-fixture/fixture.go \
+    && git -C /opt/thread-keep-fixture add fixture.go \
+    && GIT_AUTHOR_DATE='2000-01-01T00:00:00Z' GIT_COMMITTER_DATE='2000-01-01T00:00:00Z' git -C /opt/thread-keep-fixture commit --quiet -m fixture \
+    && chmod -R a+rX /opt/thread-keep-fixture
+
+ENV THREAD_KEEP=/usr/local/bin/thread-keep
+ENV THREAD_KEEP_SERVER=/usr/local/bin/thread-keep-server
+ENV THREAD_KEEP_E2E_FAKEGITHUB=/usr/local/bin/thread-keep-e2e-fakegithub
+ENV THREAD_KEEP_E2E_MCPCLIENT=/usr/local/bin/thread-keep-e2e-mcpclient
+
+ENTRYPOINT ["./e2e/run.sh"]

@@ -1,0 +1,13 @@
+#!/usr/bin/env sh
+# Thread Keep git hook — asynchronous index refresh after each source commit.
+#
+# Install: copy to .git/hooks/post-commit and mark executable.
+# The refresh runs in the background and logs into the Git directory, so the
+# commit itself is never delayed and never fails because of Thread Keep.
+
+command -v thread-keep >/dev/null 2>&1 || exit 0
+git_dir="$(git rev-parse --git-dir 2>/dev/null)" || exit 0
+(
+	thread-keep --json update >>"$git_dir/thread-keep-update.log" 2>&1 &
+)
+exit 0

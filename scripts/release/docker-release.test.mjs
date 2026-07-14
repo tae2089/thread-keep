@@ -98,6 +98,7 @@ test("tag workflow publishes six pack projects before the PyPI core project", as
   for (const language of ["typescript", "javascript", "python", "java", "kotlin", "rust"]) {
     assert.match(workflow, new RegExp(`- ${language}$`, "m"));
   }
+  assert.match(workflow, /^      name: pypi-\$\{\{ matrix\.language \}\}$/m);
   assert.match(workflow, /--distribution="thread-keep-pack-\$\{\{ matrix\.language \}\}"/);
   assert.match(workflow, /^          packages-dir: release\/wheels\/thread-keep-pack-\$\{\{ matrix\.language \}\}\/$/m);
   assert.match(workflow, /^  pypi:$/m);

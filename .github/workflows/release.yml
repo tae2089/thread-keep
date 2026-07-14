@@ -249,7 +249,7 @@ jobs:
           - rust
     runs-on: ubuntu-24.04
     environment:
-      name: pypi
+      name: pypi-${{ matrix.language }}
       url: https://pypi.org/p/thread-keep-pack-${{ matrix.language }}
     permissions:
       contents: read

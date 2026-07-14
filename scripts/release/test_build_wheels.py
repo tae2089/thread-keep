@@ -91,21 +91,28 @@ class BuildWheelsTest(unittest.TestCase):
         first = self.build(self.root / "first")
         second = self.build(self.root / "second")
 
-        self.assertEqual(len(first), len(config["targets"]))
-        self.assertEqual([path.name for path in first], [path.name for path in second])
+        self.assertEqual(len(first), len(config["targets"]) * (len(config["packs"]) + 1))
+        self.assertEqual(
+            [path.relative_to(self.root / "first") for path in first],
+            [path.relative_to(self.root / "second") for path in second],
+        )
         for left, right in zip(first, second, strict=True):
             self.assertEqual(hashlib.sha256(left.read_bytes()).digest(), hashlib.sha256(right.read_bytes()).digest())
 
-        wheel = next(path for path in first if "manylinux_2_39_x86_64" in path.name)
+        wheel = next(
+            path
+            for path in first
+            if path.parent.name == "thread-keep" and "manylinux_2_39_x86_64" in path.name
+        )
         with zipfile.ZipFile(wheel) as archive:
             names = set(archive.namelist())
             dist_info = "thread_keep-1.2.3.dist-info"
             expected_binaries = {
                 "thread_keep/bin/thread-keep",
                 "thread_keep/bin/thread-keep-mcp",
-                *(f"thread_keep/packs/{pack['id']}" for pack in config["packs"]),
             }
             self.assertTrue(expected_binaries <= names)
+            self.assertFalse(any(name.startswith("thread_keep/packs/") for name in names))
             self.assertIn("thread_keep/launcher.py", names)
             self.assertIn(f"{dist_info}/LICENSE", names)
 
@@ -113,6 +120,19 @@ class BuildWheelsTest(unittest.TestCase):
             self.assertIn("Name: thread-keep\n", metadata)
             self.assertIn("Version: 1.2.3\n", metadata)
             self.assertIn("Requires-Python: >=3.9\n", metadata)
+            for pack in config["packs"]:
+                language = pack["language"]
+                distribution = f"thread-keep-pack-{language}"
+                self.assertIn(f"Provides-Extra: {language}\n", metadata)
+                self.assertIn(
+                    f'Requires-Dist: {distribution}==1.2.3; extra == "{language}"\n',
+                    metadata,
+                )
+                self.assertIn(
+                    f'Requires-Dist: {distribution}==1.2.3; extra == "all"\n',
+                    metadata,
+                )
+            self.assertIn("Provides-Extra: all\n", metadata)
 
             wheel_metadata = archive.read(f"{dist_info}/WHEEL").decode()
             self.assertIn("Root-Is-Purelib: false\n", wheel_metadata)
@@ -137,10 +157,43 @@ class BuildWheelsTest(unittest.TestCase):
                 self.assertEqual(digest, f"sha256={encoded}")
                 self.assertEqual(size, str(len(contents)))
 
+        pack = config["packs"][0]
+        pack_wheel = next(
+            path
+            for path in first
+            if path.parent.name == f"thread-keep-pack-{pack['language']}"
+            and "manylinux_2_39_x86_64" in path.name
+        )
+        with zipfile.ZipFile(pack_wheel) as archive:
+            names = set(archive.namelist())
+            module = f"thread_keep_pack_{pack['language']}"
+            dist_info = f"thread_keep_pack_{pack['language']}-1.2.3.dist-info"
+            executable = f"{module}/bin/{pack['id']}"
+            self.assertEqual(
+                names,
+                {
+                    f"{module}/__init__.py",
+                    executable,
+                    f"{dist_info}/LICENSE",
+                    f"{dist_info}/METADATA",
+                    f"{dist_info}/WHEEL",
+                    f"{dist_info}/RECORD",
+                },
+            )
+            metadata = archive.read(f"{dist_info}/METADATA").decode()
+            self.assertIn(f"Name: thread-keep-pack-{pack['language']}\n", metadata)
+            self.assertIn("Version: 1.2.3\n", metadata)
+            self.assertEqual(archive.getinfo(executable).external_attr >> 16 & 0o777, 0o755)
+
     def test_pip_install_preserves_packaged_executable_modes(self) -> None:
         self.seed_artifacts()
         wheels = self.build(self.root / "wheels")
-        wheel = next(path for path in wheels if "manylinux_2_39_x86_64" in path.name)
+        wheel = next(
+            path
+            for path in wheels
+            if path.parent.name == "thread-keep-pack-typescript"
+            and "manylinux_2_39_x86_64" in path.name
+        )
         installed = self.root / "installed"
 
         result = subprocess.run(
@@ -163,7 +216,7 @@ class BuildWheelsTest(unittest.TestCase):
             text=True,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        packaged = installed / "thread_keep" / "packs" / "thread-keep-index-typescript"
+        packaged = installed / "thread_keep_pack_typescript" / "bin" / "thread-keep-index-typescript"
         self.assertTrue(packaged.is_file())
         self.assertNotEqual(packaged.stat().st_mode & 0o111, 0)
 

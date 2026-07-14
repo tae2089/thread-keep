@@ -16,6 +16,7 @@ import (
 func Commands(runner *Runner) []*cobra.Command {
 	return []*cobra.Command{
 		initCommand(runner),
+		packCommand(runner),
 		indexersCommand(runner),
 		remoteCommand(runner),
 		candidateCommand(runner),
@@ -151,35 +152,6 @@ func indexersCommand(runner *Runner) *cobra.Command {
 	command.AddCommand(&cobra.Command{Use: "list", Short: "list builtin and locally installed indexers", Args: noArgs, RunE: runner.withService(func(ctx context.Context, service *app.Service, command *cobra.Command, _ []string) (any, error) {
 		return service.Indexers(ctx)
 	})})
-	install := &cobra.Command{Use: "install", Short: "install detected missing official indexers", Args: noArgs, RunE: runner.withService(func(ctx context.Context, service *app.Service, command *cobra.Command, _ []string) (any, error) {
-		detected, err := command.Flags().GetBool("detected")
-		if err != nil {
-			return nil, err
-		}
-		if !detected {
-			return nil, domain.NewError(domain.CodeValidation, errors.New("indexers install requires --detected"))
-		}
-		return service.InstallIndexers(ctx)
-	})}
-	install.Flags().Bool("detected", false, "install only official packs detected in the current repository")
-	command.AddCommand(install)
-	syncCommand := &cobra.Command{Use: "sync", Short: "activate detected official indexers from a signed release", Args: noArgs, RunE: runner.withService(func(ctx context.Context, service *app.Service, command *cobra.Command, _ []string) (any, error) {
-		detected, err := command.Flags().GetBool("detected")
-		if err != nil {
-			return nil, err
-		}
-		if !detected {
-			return nil, domain.NewError(domain.CodeValidation, errors.New("indexers sync requires --detected"))
-		}
-		version, err := command.Flags().GetString("version")
-		if err != nil {
-			return nil, err
-		}
-		return service.SyncIndexers(ctx, version)
-	})}
-	syncCommand.Flags().Bool("detected", false, "sync only official packs detected in the current repository")
-	syncCommand.Flags().String("version", "", "activate an exact stable release version (X.Y.Z); defaults to latest")
-	command.AddCommand(syncCommand)
 	return command
 }
 

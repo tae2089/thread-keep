@@ -40,11 +40,9 @@ CI requires no publishing credentials.
 
 Complete these steps before pushing the first release tag:
 
-1. Generate an Ed25519 key pair in secure release infrastructure. Store only the base64 32-byte public key as the GitHub Actions repository variable `THREAD_KEEP_MANIFEST_PUBLIC_KEY_B64`.
-2. Store the matching base64 64-byte Go Ed25519 private key as the Actions secret `THREAD_KEEP_MANIFEST_PRIVATE_KEY_B64`. Never place it in the repository, workflow input, command history, or logs.
-3. Create a protected GitHub Actions environment named `release` and require the desired deployment approvals for GitHub Release publication.
-4. Create a protected GitHub Actions environment named `pypi`. Reserve or create the PyPI project `thread-keep`, then configure its GitHub Trusted Publisher for owner `tae2089`, repository `thread-keep`, workflow `release.yml`, and environment `pypi`. No PyPI API token is stored in GitHub.
-5. After the first container publication, set each GHCR package to public visibility and confirm it inherits or grants Actions access to `tae2089/thread-keep`. Container publication uses the job-scoped `GITHUB_TOKEN`; it needs no registry secret.
+1. Create a protected GitHub Actions environment named `release` and require the desired deployment approvals for GitHub Release publication.
+2. Create a protected GitHub Actions environment named `pypi`. Reserve or create all seven PyPI projects: `thread-keep` plus `thread-keep-pack-typescript`, `thread-keep-pack-javascript`, `thread-keep-pack-python`, `thread-keep-pack-java`, `thread-keep-pack-kotlin`, and `thread-keep-pack-rust`. Configure every project's GitHub Trusted Publisher for owner `tae2089`, repository `thread-keep`, workflow `release.yml`, and environment `pypi`. No PyPI API token is stored in GitHub.
+3. After the first container publication, set each GHCR package to public visibility and confirm it inherits or grants Actions access to `tae2089/thread-keep`. Container publication uses the job-scoped `GITHUB_TOKEN`; it needs no registry secret.
 
 ## Release flow
 
@@ -59,17 +57,16 @@ The workflow performs these gates in order:
 
 1. Validate the tag, official repository identity, source/tests, Docker E2E, GoReleaser config, and `LICENSE`.
 2. Build five runtime binaries and six pack binaries on each native target with `CGO_ENABLED=1`.
-3. Require all 55 target-qualified binaries before assembling metadata.
-4. Generate SHA-256 checksums, the pack-manifest payload, and five deterministic platform wheels from the staged GoReleaser artifacts.
-5. Validate every wheel archive, including its platform tag, packaged core binaries, six official packs, executable modes, entry points, and `RECORD` hashes.
-6. Verify the configured public/private signing keys match, sign the manifest with the existing Go signer, and delete the temporary private-key file.
-7. Publish or byte-for-byte verify the GitHub Release.
-8. Verify any existing PyPI wheel filename and SHA-256 before using Trusted Publishing to upload missing wheels.
-9. Independently cross-compile the container binaries for Linux amd64/arm64 and let GoReleaser `dockers_v2` publish the three GHCR manifests.
+3. Require all 55 target-qualified binaries before assembling release output.
+4. Generate SHA-256 checksums and 35 deterministic platform wheels from the staged GoReleaser artifacts: five core wheels and five wheels for each of six pack distributions.
+5. Validate every wheel archive, including its platform tag, isolated core or single-pack contents, executable modes, extras metadata, entry points, and `RECORD` hashes.
+6. Publish or byte-for-byte verify the unsigned raw GitHub Release artifacts.
+7. Verify any existing PyPI wheel filename and SHA-256, publish all six pack projects, then publish the core project only after every pack job succeeds.
+8. Independently cross-compile the container binaries for Linux amd64/arm64 and let GoReleaser `dockers_v2` publish the three GHCR manifests.
 
 A rerun accepts existing GitHub artifacts only when their full asset list and checksums exactly match the rebuilt output. PyPI recovery permits `skip-existing` only after every existing wheel digest matches the deterministic local rebuild. Partial matching publication can resume; any mismatch fails before upload.
 
-PyPI and container publication run independently after the GitHub Release job. If either fails, the GitHub Release remains valid and the other job is not rolled back. Inspect any already-published immutable artifact before rerunning the failed job; the workflow never deletes registry state during recovery.
+Pack publication and container publication run independently after the GitHub Release job. Core PyPI publication waits for every pack project, while containers do not. If either path fails, the GitHub Release remains valid and no immutable artifact is rolled back. Inspect any already-published artifact before rerunning the failed job; the workflow never deletes registry state during recovery.
 
 ## Artifact contract
 
@@ -80,12 +77,11 @@ thread-keep_linux_amd64
 thread-keep-mcp_darwin_arm64
 thread-keep-index-typescript_windows_amd64.exe
 checksums.txt
-thread-keep-indexers-manifest-v1.json
 ```
 
-The signed manifest contains the release SemVer plus exact target URLs, byte sizes, and SHA-256 values for all six language packs. GoReleaser injects that same SemVer into every pack's runtime descriptor, and the release `thread-keep` binary embeds only the matching public verification key. Managed installs retain immutable digest-addressed binaries and atomically switch a small activation document during `indexers sync`.
+GitHub Release binaries are unsigned raw artifacts. `checksums.txt` records every artifact's SHA-256 for deterministic recovery and corruption detection, but it is published beside the artifacts and is not an independent publisher signature. The raw binaries are retained for manual and operational use; PyPI remains the supported installation and version-management channel for the complete local CLI.
 
-The single PyPI project publishes five files for the same release version, for example:
+Each of the seven PyPI projects publishes five files for the same release version. Core examples:
 
 ```text
 thread_keep-1.2.3-py3-none-manylinux_2_39_x86_64.whl
@@ -93,7 +89,7 @@ thread_keep-1.2.3-py3-none-macosx_15_0_arm64.whl
 thread_keep-1.2.3-py3-none-win_amd64.whl
 ```
 
-pip selects one compatible wheel. Each wheel contains `thread-keep`, `thread-keep-mcp`, and all six official packs. Its Python console-script adapter passes the bundled directory and exact release version to the Go resolver; a signed managed activation or legacy local pack remains higher priority. Wheels are binary-only and require Python 3.9 or newer. No sdist is published because one source archive cannot reproduce all target-qualified CGO binaries.
+pip selects one compatible core wheel, which contains only `thread-keep` and `thread-keep-mcp`. Extras such as `thread-keep[typescript,python]` add the matching `thread-keep-pack-<language>` wheels with exact-version dependencies; `thread-keep[all]` adds all six. The Python console-script adapter passes validated installed-pack paths and the exact release version to the Go resolver, and those packs take precedence over legacy fixed-path manual packs. Wheels are binary-only and require Python 3.9 or newer. No sdist is published because one source archive cannot reproduce all target-qualified CGO binaries.
 
 The repository and every generated wheel declare the SPDX license identifier `MIT`. The wheel builder copies the repository-root `LICENSE` into every platform wheel.
 
@@ -119,11 +115,10 @@ npm_config_cache=/tmp/thread-keep-npm-cache \
   --config .goreleaser.docker.yaml
 ```
 
-A native snapshot additionally needs a valid public-key-shaped test value or the real public release variable:
+A native snapshot needs no release signing configuration:
 
 ```bash
-THREAD_KEEP_MANIFEST_PUBLIC_KEY_B64=<base64-public-key> \
-  npx --yes @goreleaser/goreleaser@2.17.0 \
+npx --yes @goreleaser/goreleaser@2.17.0 \
   build --single-target --clean --snapshot
 ```
 

@@ -82,12 +82,35 @@ def _validate_inputs(
                 raise ValueError(f"missing wheel artifact: {artifact.name}")
 
 
-def _metadata(repository: str, version: str) -> bytes:
-    return (
+def _core_metadata(packs: Sequence[Mapping[str, str]], repository: str, version: str) -> bytes:
+    lines = [
         "Metadata-Version: 2.3\n"
         "Name: thread-keep\n"
         f"Version: {version}\n"
         "Summary: Versioned local code context for humans and coding agents\n"
+        "License: MIT\n"
+        "Requires-Python: >=3.9\n"
+        f"Project-URL: Repository, https://github.com/{repository}\n"
+    ]
+    for pack in packs:
+        language = pack["language"]
+        distribution = f"thread-keep-pack-{language}"
+        lines.append(f"Provides-Extra: {language}\n")
+        lines.append(f'Requires-Dist: {distribution}=={version}; extra == "{language}"\n')
+    lines.append("Provides-Extra: all\n")
+    for pack in packs:
+        distribution = f"thread-keep-pack-{pack['language']}"
+        lines.append(f'Requires-Dist: {distribution}=={version}; extra == "all"\n')
+    lines.append("\n")
+    return "".join(lines).encode()
+
+
+def _pack_metadata(language: str, repository: str, version: str) -> bytes:
+    return (
+        "Metadata-Version: 2.3\n"
+        f"Name: thread-keep-pack-{language}\n"
+        f"Version: {version}\n"
+        f"Summary: Native {language} indexer pack for Thread Keep\n"
         "License: MIT\n"
         "Requires-Python: >=3.9\n"
         f"Project-URL: Repository, https://github.com/{repository}\n"
@@ -123,7 +146,14 @@ def _write_member(archive: zipfile.ZipFile, name: str, contents: bytes, mode: in
     archive.writestr(info, contents, compresslevel=9)
 
 
-def _build_wheel(
+def _write_wheel(path: Path, files: dict[str, bytes], executable_paths: set[str]) -> Path:
+    with zipfile.ZipFile(path, "w") as archive:
+        for name in sorted(files):
+            _write_member(archive, name, files[name], 0o755 if name in executable_paths else 0o644)
+    return path
+
+
+def _build_core_wheel(
     artifacts_dir: Path,
     config: Mapping,
     license_file: Path,
@@ -138,7 +168,7 @@ def _build_wheel(
         "thread_keep/__init__.py": f'__version__ = "{version}"\n'.encode(),
         "thread_keep/launcher.py": (template_dir / "launcher.py").read_bytes(),
         f"{dist_info}/LICENSE": license_file.read_bytes(),
-        f"{dist_info}/METADATA": _metadata(repository, version),
+        f"{dist_info}/METADATA": _core_metadata(config["packs"], repository, version),
         f"{dist_info}/WHEEL": _wheel_metadata(target["wheelTag"]),
         f"{dist_info}/entry_points.txt": (
             "[console_scripts]\n"
@@ -152,17 +182,48 @@ def _build_wheel(
         name = f"thread_keep/bin/{binary}{extension}"
         files[name] = (artifacts_dir / _artifact_name(binary, target)).read_bytes()
         executable_paths.add(name)
-    for pack in config["packs"]:
-        name = f"thread_keep/packs/{pack['id']}{extension}"
-        files[name] = (artifacts_dir / _artifact_name(pack["id"], target)).read_bytes()
-        executable_paths.add(name)
     record_path = f"{dist_info}/RECORD"
     files[record_path] = _record(files, record_path)
-    wheel = output_dir / f"thread_keep-{version}-py3-none-{target['wheelTag']}.whl"
-    with zipfile.ZipFile(wheel, "w") as archive:
-        for name in sorted(files):
-            _write_member(archive, name, files[name], 0o755 if name in executable_paths else 0o644)
-    return wheel
+    distribution_dir = output_dir / "thread-keep"
+    distribution_dir.mkdir(exist_ok=True)
+    return _write_wheel(
+        distribution_dir / f"thread_keep-{version}-py3-none-{target['wheelTag']}.whl",
+        files,
+        executable_paths,
+    )
+
+
+def _build_pack_wheel(
+    artifacts_dir: Path,
+    license_file: Path,
+    output_dir: Path,
+    pack: Mapping[str, str],
+    repository: str,
+    target: Mapping[str, str],
+    version: str,
+) -> Path:
+    language = pack["language"]
+    distribution = f"thread-keep-pack-{language}"
+    normalized = distribution.replace("-", "_")
+    dist_info = f"{normalized}-{version}.dist-info"
+    extension = ".exe" if target["goos"] == "windows" else ""
+    executable = f"{normalized}/bin/{pack['id']}{extension}"
+    files = {
+        f"{normalized}/__init__.py": f'__version__ = "{version}"\n'.encode(),
+        executable: (artifacts_dir / _artifact_name(pack["id"], target)).read_bytes(),
+        f"{dist_info}/LICENSE": license_file.read_bytes(),
+        f"{dist_info}/METADATA": _pack_metadata(language, repository, version),
+        f"{dist_info}/WHEEL": _wheel_metadata(target["wheelTag"]),
+    }
+    record_path = f"{dist_info}/RECORD"
+    files[record_path] = _record(files, record_path)
+    distribution_dir = output_dir / distribution
+    distribution_dir.mkdir(exist_ok=True)
+    return _write_wheel(
+        distribution_dir / f"{normalized}-{version}-py3-none-{target['wheelTag']}.whl",
+        files,
+        {executable},
+    )
 
 
 def _replace_directory(staged: Path, output: Path) -> None:
@@ -198,12 +259,14 @@ def build_wheels(
     staged = Path(tempfile.mkdtemp(prefix=f".{output_dir.name}-", dir=output_dir.parent))
     try:
         for target in config["targets"]:
-            _build_wheel(artifacts_dir, config, license_file, staged, repository, target, template_dir, version)
+            _build_core_wheel(artifacts_dir, config, license_file, staged, repository, target, template_dir, version)
+            for pack in config["packs"]:
+                _build_pack_wheel(artifacts_dir, license_file, staged, pack, repository, target, version)
         _replace_directory(staged, output_dir)
     except BaseException:
         shutil.rmtree(staged, ignore_errors=True)
         raise
-    return sorted(output_dir.glob("*.whl"))
+    return sorted(output_dir.glob("*/*.whl"))
 
 
 def _arguments(arguments: Sequence[str] | None = None) -> argparse.Namespace:

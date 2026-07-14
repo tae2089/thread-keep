@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -18,14 +19,25 @@ const OutputVersion = 1
 
 type ServiceOpener func(context.Context, string) (*app.Service, error)
 
+type ProcessRunner func(context.Context, []string, io.Reader, io.Writer, io.Writer) error
+
 type Runner struct {
-	open ServiceOpener
+	open       ServiceOpener
+	runProcess ProcessRunner
 }
 
 type operation func(context.Context, *app.Service, *cobra.Command, []string) (any, error)
 
 func NewRunner(open ServiceOpener) *Runner {
-	return &Runner{open: open}
+	return &Runner{open: open, runProcess: runProcess}
+}
+
+func runProcess(ctx context.Context, command []string, stdin io.Reader, stdout, stderr io.Writer) error {
+	process := exec.CommandContext(ctx, command[0], command[1:]...)
+	process.Stdin = stdin
+	process.Stdout = stdout
+	process.Stderr = stderr
+	return process.Run()
 }
 
 func (r *Runner) Execute(ctx context.Context, root *cobra.Command, arguments []string, stdout, stderr io.Writer) int {
@@ -132,6 +144,9 @@ func writeResult(writer io.Writer, jsonOutput bool, result any) error {
 			}
 		}
 		return nil
+	case PackInstallResult:
+		_, err := fmt.Fprintf(writer, "installed %s via %s\n", strings.Join(value.Languages, ","), value.Requirement)
+		return err
 	case domain.Remote:
 		_, err := fmt.Fprintf(writer, "%s\t%s\n", value.Name, value.Path)
 		return err

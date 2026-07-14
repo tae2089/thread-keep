@@ -2,6 +2,7 @@ package indexing
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -187,7 +188,7 @@ func TestProcessIndexerRejectsProtocolV2Response(t *testing.T) {
 	}
 }
 
-func TestProcessIndexerRejectsManagedPackVersionMismatch(t *testing.T) {
+func TestProcessIndexerRejectsPackVersionMismatch(t *testing.T) {
 	root := t.TempDir()
 	pack := filepath.Join(root, "thread-keep-index-typescript")
 	script := "#!/bin/sh\nprintf '%s\\n' '{\"protocol_version\":1,\"indexer\":{\"id\":\"thread-keep-index-typescript\",\"version\":\"2.0.0\"},\"language\":\"typescript\",\"entities\":[]}'\n"
@@ -200,24 +201,23 @@ func TestProcessIndexerRejectsManagedPackVersionMismatch(t *testing.T) {
 	}
 }
 
-func TestResolveAvailablePackFallsBackToBundledPack(t *testing.T) {
+func TestResolveAvailablePackFindsPyPIPack(t *testing.T) {
 	configDir := t.TempDir()
-	bundledDir := t.TempDir()
-	bundledPath := filepath.Join(bundledDir, packExecutableName(packID(TypeScript)))
-	if err := os.WriteFile(bundledPath, []byte("pack"), 0o755); err != nil {
-		t.Fatalf("WriteFile(bundled pack): %v", err)
+	packPath := filepath.Join(t.TempDir(), packExecutableName(packID(TypeScript)))
+	if err := os.WriteFile(packPath, []byte("pack"), 0o755); err != nil {
+		t.Fatalf("WriteFile(PyPI pack): %v", err)
 	}
 
-	pack, found, err := resolveAvailablePack(configDir, bundledDir, "1.2.3", TypeScript)
+	pack, found, err := resolveAvailablePack(configDir, pypiPackJSON(t, TypeScript, packPath, "1.2.3"), "1.2.3", TypeScript)
 	if err != nil {
 		t.Fatalf("resolveAvailablePack() error = %v", err)
 	}
-	if !found || pack.Path != bundledPath || pack.Descriptor.ID != packID(TypeScript) || pack.Descriptor.Version != "1.2.3" {
-		t.Fatalf("resolveAvailablePack() = %#v, %v, want bundled release pack", pack, found)
+	if !found || pack.Path != packPath || pack.Descriptor.ID != packID(TypeScript) || pack.Descriptor.Version != "1.2.3" {
+		t.Fatalf("resolveAvailablePack() = %#v, %v, want PyPI pack", pack, found)
 	}
 }
 
-func TestResolveAvailablePackPrefersLocalPackOverBundledPack(t *testing.T) {
+func TestResolveAvailablePackPrefersPyPIPackOverLocalPack(t *testing.T) {
 	configDir := t.TempDir()
 	localPath := filepath.Join(packDirectory(configDir), packExecutableName(packID(TypeScript)))
 	if err := os.MkdirAll(filepath.Dir(localPath), 0o755); err != nil {
@@ -226,29 +226,51 @@ func TestResolveAvailablePackPrefersLocalPackOverBundledPack(t *testing.T) {
 	if err := os.WriteFile(localPath, []byte("local"), 0o755); err != nil {
 		t.Fatalf("WriteFile(local pack): %v", err)
 	}
-	bundledDir := t.TempDir()
-	bundledPath := filepath.Join(bundledDir, packExecutableName(packID(TypeScript)))
-	if err := os.WriteFile(bundledPath, []byte("bundled"), 0o755); err != nil {
-		t.Fatalf("WriteFile(bundled pack): %v", err)
+	pypiPath := filepath.Join(t.TempDir(), packExecutableName(packID(TypeScript)))
+	if err := os.WriteFile(pypiPath, []byte("pypi"), 0o755); err != nil {
+		t.Fatalf("WriteFile(PyPI pack): %v", err)
 	}
 
-	pack, found, err := resolveAvailablePack(configDir, bundledDir, "1.2.3", TypeScript)
+	pack, found, err := resolveAvailablePack(configDir, pypiPackJSON(t, TypeScript, pypiPath, "1.2.3"), "1.2.3", TypeScript)
 	if err != nil {
 		t.Fatalf("resolveAvailablePack() error = %v", err)
 	}
-	if !found || pack.Path != localPath || pack.Descriptor.Version != "" {
-		t.Fatalf("resolveAvailablePack() = %#v, %v, want local pack", pack, found)
+	if !found || pack.Path != pypiPath || pack.Descriptor.Version != "1.2.3" {
+		t.Fatalf("resolveAvailablePack() = %#v, %v, want PyPI pack", pack, found)
 	}
 }
 
-func TestResolveAvailablePackRejectsInvalidBundledVersion(t *testing.T) {
-	bundledDir := t.TempDir()
-	bundledPath := filepath.Join(bundledDir, packExecutableName(packID(TypeScript)))
-	if err := os.WriteFile(bundledPath, []byte("pack"), 0o755); err != nil {
-		t.Fatalf("WriteFile(bundled pack): %v", err)
+func TestResolveAvailablePackRejectsInvalidPyPIPackContract(t *testing.T) {
+	packPath := filepath.Join(t.TempDir(), packExecutableName(packID(TypeScript)))
+	if err := os.WriteFile(packPath, []byte("pack"), 0o755); err != nil {
+		t.Fatalf("WriteFile(PyPI pack): %v", err)
 	}
 
-	if _, _, err := resolveAvailablePack(t.TempDir(), bundledDir, "latest", TypeScript); domain.CodeOf(err) != domain.CodeValidation {
-		t.Fatalf("resolveAvailablePack() error = %v, want validation", err)
+	tests := map[string]struct {
+		mapping string
+		version string
+	}{
+		"malformed JSON":   {mapping: "{"},
+		"invalid version":  {mapping: pypiPackJSON(t, TypeScript, packPath, "latest"), version: "latest"},
+		"version mismatch": {mapping: pypiPackJSON(t, TypeScript, packPath, "1.2.2"), version: "1.2.3"},
+		"unknown language": {mapping: `{"ruby":{"path":"/tmp/thread-keep-index-ruby","version":"1.2.3"}}`, version: "1.2.3"},
 	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, _, err := resolveAvailablePack(t.TempDir(), test.mapping, test.version, TypeScript); domain.CodeOf(err) != domain.CodeValidation {
+				t.Fatalf("resolveAvailablePack() error = %v, want validation", err)
+			}
+		})
+	}
+}
+
+func pypiPackJSON(t *testing.T, language Language, path, version string) string {
+	t.Helper()
+	value, err := json.Marshal(map[Language]map[string]string{
+		language: {"path": path, "version": version},
+	})
+	if err != nil {
+		t.Fatalf("Marshal(PyPI pack mapping): %v", err)
+	}
+	return string(value)
 }

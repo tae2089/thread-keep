@@ -68,7 +68,8 @@ test("tag workflow publishes PyPI and containers after GitHub Release without np
   const workflow = await readFile(".github/workflows/release.yml", "utf8");
   assert.match(workflow, /^  release:$/m);
   assert.match(workflow, /^    environment: release$/m);
-  assert.match(workflow, /^  pypi:\n    needs: release$/m);
+  assert.match(workflow, /^  pypi-packs:\n    needs: release$/m);
+  assert.match(workflow, /^  pypi:\n    needs: pypi-packs$/m);
   assert.match(workflow, /^  containers:$/m);
   assert.match(workflow, /^    needs: release$/m);
   assert.match(workflow, /^      packages: write$/m);
@@ -76,21 +77,36 @@ test("tag workflow publishes PyPI and containers after GitHub Release without np
   assert.match(workflow, /release --clean --config \.goreleaser\.docker\.yaml/);
   assert.doesNotMatch(
     workflow,
-    /NPM_TOKEN|registry\.npmjs\.org|npm publish|npm view|release\/npm|environment: npm|--meta=npm\/thread-keep/,
+    /NPM_TOKEN|registry\.npmjs\.org|npm publish|npm view|release\/npm|environment: npm|--meta=npm\/thread-keep|THREAD_KEEP_MANIFEST_|sign-manifest|indexers-manifest/,
   );
 });
 
-test("tag workflow publishes GoReleaser-derived wheels through PyPI Trusted Publishing", async () => {
+test("native release builds do not embed a manifest verification key", async () => {
+  const goreleaser = await readFile(".goreleaser.yaml", "utf8");
+  const makefile = await readFile("Makefile", "utf8");
+  assert.doesNotMatch(goreleaser, /officialManifestPublicKeyBase64|THREAD_KEEP_MANIFEST_/);
+  assert.doesNotMatch(makefile, /THREAD_KEEP_MANIFEST_|officialManifestPublicKeyBase64/);
+});
+
+test("tag workflow publishes six pack projects before the PyPI core project", async () => {
   const workflow = await readFile(".github/workflows/release.yml", "utf8");
   assert.match(workflow, /python3 scripts\/release\/build_wheels\.py/);
   assert.match(workflow, /name: pypi-wheels/);
-  assert.match(workflow, /^  pypi:$/m);
+  assert.match(workflow, /find release\/wheels -mindepth 2 -maxdepth 2 -name '\*\.whl'.*"35"/);
+  assert.match(workflow, /^  pypi-packs:$/m);
   assert.match(workflow, /^    needs: release$/m);
+  for (const language of ["typescript", "javascript", "python", "java", "kotlin", "rust"]) {
+    assert.match(workflow, new RegExp(`- ${language}$`, "m"));
+  }
+  assert.match(workflow, /--distribution="thread-keep-pack-\$\{\{ matrix\.language \}\}"/);
+  assert.match(workflow, /^          packages-dir: release\/wheels\/thread-keep-pack-\$\{\{ matrix\.language \}\}\/$/m);
+  assert.match(workflow, /^  pypi:$/m);
+  assert.match(workflow, /^    needs: pypi-packs$/m);
   assert.match(workflow, /^      name: pypi$/m);
   assert.match(workflow, /^      id-token: write$/m);
   assert.match(workflow, /node scripts\/release\/verify-pypi\.mjs/);
   assert.match(workflow, /uses: pypa\/gh-action-pypi-publish@release\/v1/);
-  assert.match(workflow, /^          packages-dir: release\/wheels\/$/m);
+  assert.match(workflow, /^          packages-dir: release\/wheels\/thread-keep\/$/m);
   assert.match(workflow, /^          skip-existing: true$/m);
 });
 

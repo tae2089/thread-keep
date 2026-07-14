@@ -1,6 +1,6 @@
 # Thread Keep
 
-Thread Keep is a local-first code-context VCS. It indexes Go functions, methods and types in the core, and can index TypeScript/TSX, JavaScript/JSX, Python, Java, Kotlin, and Rust through bundled or explicitly installed Thread Keep language packs. It stores context in the Git common directory and searches entities and ContextNotes with SQLite FTS5.
+Thread Keep is a local-first code-context VCS. It indexes Go functions, methods and types in the core, and can index TypeScript/TSX, JavaScript/JSX, Python, Java, Kotlin, and Rust through optional PyPI or manually installed Thread Keep language packs. It stores context in the Git common directory and searches entities and ContextNotes with SQLite FTS5.
 
 ## Guides
 
@@ -9,18 +9,26 @@ Thread Keep is a local-first code-context VCS. It indexes Go functions, methods 
 - [Codex setup](docs/guides/codex.md) — MCP configuration and AGENTS.md instructions.
 - [Team server operations](docs/guides/team-server.md) — hosted context remote, GitHub authorization, clustering, maintenance, onboarding.
 - [PR context planning](docs/guides/pr-context-coordinator.md) — Server-owned durable webhook intake, dedicated coordinator and runner processes, Checks, landing, and recovery.
-- [Release operations](docs/guides/releases.md) — GitHub Actions, GoReleaser, signed pack assets, PyPI, and container publishing.
+- [Release operations](docs/guides/releases.md) — GitHub Actions, GoReleaser, unsigned raw assets, PyPI, and container publishing.
 
 ## Install from PyPI
 
-Published releases provide one platform wheel for Linux glibc x64/arm64, macOS x64/arm64, or Windows x64. The selected wheel contains `thread-keep`, `thread-keep-mcp`, and all six official language packs:
+Published releases provide platform wheels for Linux glibc x64/arm64, macOS x64/arm64, or Windows x64. The lightweight core wheel contains `thread-keep` and `thread-keep-mcp` only:
 
 ```bash
 python3 -m pip install thread-keep
 thread-keep --help
 ```
 
-The Python console scripts execute the packaged native binaries and expose the bundled pack directory only to that process. A pack installed later with `thread-keep indexers sync --detected [--version X.Y.Z]` is activated from the signed managed store and takes precedence over the wheel-bundled copy.
+Install only the packs you need through extras, or use the shallow CLI wrapper after installing the core:
+
+```bash
+python3 -m pip install "thread-keep[typescript,python]"
+python3 -m pip install "thread-keep[all]"
+thread-keep pack install typescript python
+```
+
+Each extra installs a separate `thread-keep-pack-<language>` distribution at the exact core version. The Python launcher exposes matching installed packs only to that process, so selected packs upgrade, pin, and roll back with the core through pip.
 Operational `thread-keep-server`, `thread-keep-coordinator`, and `thread-keep-runner` binaries remain GitHub Release and container artifacts rather than being bundled into the local CLI wheel.
 
 ## Build
@@ -274,7 +282,7 @@ Use a commit ID previously returned by `thread-keep commit` or `thread-keep log`
 
 ## TypeScript, JavaScript, Python, Java, Kotlin, and Rust packs
 
-The core automatically detects `.ts`, `.tsx`, `.mts`, `.cts`, `.js`, `.jsx`, `.mjs`, `.cjs`, `.py`, `.pyi`, `.pyw`, `.java`, `.kt`, `.kts`, and `.rs` files. It first resolves packs from Go's user configuration directory. Release-managed packs use signed activation metadata plus immutable binaries under `thread-keep/packs/objects/`; manually built and container-provided packs remain compatible at fixed paths such as `$XDG_CONFIG_HOME/thread-keep/packs/thread-keep-index-typescript`. When invoked through the PyPI console script, a target-qualified bundled pack is the final fallback. `update` never downloads, installs, or upgrades a pack.
+The core automatically detects `.ts`, `.tsx`, `.mts`, `.cts`, `.js`, `.jsx`, `.mjs`, `.cjs`, `.py`, `.pyi`, `.pyw`, `.java`, `.kt`, `.kts`, and `.rs` files. When invoked through the PyPI console script, it resolves exact-version target-qualified pack distributions first. Source builds, containers, and raw binaries can use manually provided packs at fixed paths such as `$XDG_CONFIG_HOME/thread-keep/packs/thread-keep-index-typescript`. `update` never downloads, installs, or upgrades a pack.
 
 Without a detected language's pack, Go remains searchable and `update` reports that language as `missing_pack`. Such a partial projection cannot become a context commit. Use `thread-keep update --require-complete` when automation must fail immediately on incomplete coverage.
 
@@ -284,41 +292,24 @@ Inspect the known built-in and official pack locations without initializing cont
 thread-keep indexers list
 ```
 
-The command reports whether each known indexer is built in, installed, or missing and marks the languages detected in the current repository. A release-managed install also reports its signed release version, SHA-256, and resolved immutable path. Listing validates files but never launches a pack.
+The command reports whether each known indexer is built in, installed, or missing and marks the languages detected in the current repository. A PyPI pack reports its exact release version and resolved path. Listing validates files but never launches a pack.
 
-## Official pack installation and releases
+## Package upgrades and raw release artifacts
 
-Only a release binary built with the official manifest verification key can install packs. The command never runs from `init` or `update`; invoke it explicitly for detected missing languages:
-
-```bash
-thread-keep indexers install --detected
-```
-
-The installer downloads a signed manifest from the official GitHub Release origin, verifies its Ed25519 signature, selects the current GOOS/GOARCH asset, verifies its exact byte size and SHA-256, publishes an immutable content-addressed executable, and atomically activates signed-manifest metadata. A development build without a release public key rejects installation before contacting the network or creating pack storage.
-
-Installation never replaces an existing usable pack. Synchronize every detected official pack explicitly when upgrading, pinning, or rolling back. Omitting `--version` selects the signed latest-release manifest; an exact version must be stable SemVer without the `v` prefix:
+PyPI is the supported installation, upgrade, pin, and rollback channel for the local CLI and official packs:
 
 ```bash
-thread-keep indexers sync --detected
-thread-keep indexers sync --detected --version 1.2.3
+python3 -m pip install --upgrade "thread-keep[typescript,python]"
+python3 -m pip install "thread-keep[typescript,python]==1.2.3"
 ```
 
-A failed fetch, signature, size, digest, or activation check leaves the previous active metadata unchanged. Inactive immutable artifacts are retained; automatic pack garbage collection is not implemented.
-
-Release automation embeds a base64 Ed25519 public key only:
+GitHub Releases also publish target-qualified CLI, service, runner, and pack binaries plus `checksums.txt`:
 
 ```bash
-make release-build THREAD_KEEP_MANIFEST_PUBLIC_KEY_B64=<base64-public-key>
+make release-build
 ```
 
-Create the signed envelope from a raw manifest payload with a securely provisioned base64 Ed25519 private-key file. Do not place that key in this repository or command history:
-
-```bash
-go run ./cmd/thread-keep-sign-manifest -- \
-  --payload thread-keep-indexers-manifest-v1.json \
-  --private-key "$THREAD_KEEP_PRIVATE_KEY_FILE" \
-  > thread-keep-indexers-manifest-v1.signed.json
-```
+These are unsigned raw artifacts for manual and operational use. Their published SHA-256 values detect corruption but are not an independent publisher signature. A raw standalone CLI binary does not receive the PyPI environment contract; provide fixed-path packs manually or use the supported PyPI installation for selected local-language coverage.
 
 Stable tags also publish GoReleaser-built server, coordinator, and runner images for Linux amd64/arm64:
 

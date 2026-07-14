@@ -11,14 +11,24 @@ This guide gets you from zero to a committed, searchable context note in about
 
 ## Build and install
 
-For a published release, install the platform wheel into a Python environment. It contains the CLI, MCP server, and every official language pack:
+For a published release, install the lightweight core platform wheel into a Python environment. It contains the CLI and MCP server:
 
 ```bash
 python3 -m pip install thread-keep
 thread-keep --help
 ```
 
-The wheel supports Linux glibc x64/arm64, macOS x64/arm64, and Windows x64. Managed packs installed later through `indexers sync` take precedence over its bundled copies.
+The wheel supports Linux glibc x64/arm64, macOS x64/arm64, and Windows x64. Add only the language packs you need:
+
+```bash
+python3 -m pip install "thread-keep[typescript,python]"
+# Or, after the core is installed:
+thread-keep pack install typescript python
+# Install every official pack only when needed:
+python3 -m pip install "thread-keep[all]"
+```
+
+Each extra selects a separate native pack distribution at the exact core version. The `pack install` command is a shallow wrapper around the current Python environment's pip; it does not detect or install languages implicitly.
 
 To build from source instead, Thread Keep uses CGO-backed SQLite (FTS5), so you need a Go toolchain and a C compiler. From the repository root:
 
@@ -36,19 +46,24 @@ This produces three binaries in `bin/`:
 
 Put `bin/thread-keep` on your `PATH`, or call it by path as `./bin/thread-keep`.
 
-Go is indexed out of the box. A source build needs explicit TypeScript/JavaScript, Python, Java, Kotlin, and Rust packs; the PyPI wheel already bundles them:
+Go is indexed out of the box. A source build needs explicit TypeScript/JavaScript, Python, Java, Kotlin, and Rust packs; PyPI extras install them selectively:
 
 ```bash
 make build-pack
 ```
 
-Then place each manually built pack executable at its legacy fixed path under your user config
-directory (for example `$XDG_CONFIG_HOME/thread-keep/packs/...`). Release binaries can instead run
-`thread-keep indexers install --detected`; later explicit upgrades or version changes use
-`thread-keep indexers sync --detected [--version X.Y.Z]`. Run
-`thread-keep indexers list` to see which packs are built in, installed, or missing,
+Then place each manually built pack executable at its fixed path under your user config
+directory (for example `$XDG_CONFIG_HOME/thread-keep/packs/...`). Run
+`thread-keep indexers list` to see which packs are built in, available, or missing,
 and which languages your current repo uses. Without a detected language's pack, Go
 stays searchable and that language reports `missing_pack`.
+
+Upgrade, pin, or roll back the core and selected pack set through pip:
+
+```bash
+python3 -m pip install --upgrade "thread-keep[typescript,python]"
+python3 -m pip install "thread-keep[typescript,python]==1.2.3"
+```
 
 ## Your first 15 minutes
 

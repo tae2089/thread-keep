@@ -141,16 +141,16 @@ thread-keep indexers list
   -> read-only report of known builtin/installed/missing indexers and detected languages
 
 thread-keep update
-  -> automatically select installed packs for detected languages
+  -> select exact-version PyPI pack distributions first, then fixed-path manual packs
 
-thread-keep indexers install --detected
-  -> install detected missing official packs without replacing an active pack
+python3 -m pip install --upgrade "thread-keep[typescript,python]"
+  -> upgrade the core and selected pack distributions at one exact version
 
-thread-keep indexers sync --detected [--version X.Y.Z]
-  -> explicitly activate latest or exact-version official packs for detected languages
+thread-keep pack install typescript python
+  -> shallowly invoke the current Python environment's pip for those extras
 ~~~
 
-Packs live in the user configuration directory, not each repository. Managed binaries are immutable objects keyed by SHA-256; a bounded activation document records the signed pack ID, release version, protocol, size and digest. One atomic activation-document rename changes the selected version. The core still accepts legacy fixed official filenames for manual builds and container images. A release binary embeds an Ed25519 public key and accepts the official GitHub Releases signed manifest only. `indexers install --detected` activates only missing packs; `indexers sync --detected` explicitly replaces detected packs from latest or an exact stable release. Repositories store coverage/provenance only and never a downloaded executable.
+The lightweight `thread-keep` wheel contains the native CLI and MCP server. Each `thread-keep-pack-<language>` distribution contains one target-qualified official pack, and core extras depend on those distributions at the exact core version. The launcher discovers matching installed distributions and supplies their validated absolute paths to the Go process; they take precedence over fixed-path manual packs. Source builds, containers, and unsigned raw release binaries can still use the fixed official filenames under the user configuration directory. Repositories store coverage/provenance only and never a downloaded executable.
 
 ## Pack protocol
 
@@ -283,26 +283,17 @@ Completeness: P2 covers empty candidates; P5-P6 preserve the pending-note guard;
 
 ## CLI contract
 
-Additional future commands:
+Implemented pack command:
 
 ~~~text
-<additional language pack commands as new official packs are introduced>
+thread-keep pack install <language>...
 ~~~
 
-`thread-keep update --require-complete`, `thread-keep indexers list`, `thread-keep indexers install --detected`, and `thread-keep indexers sync --detected [--version X.Y.Z]` are implemented. Install is missing-only; sync is the explicit upgrade/pin/rollback operation. Neither runs during init/update, and both networked operations require a release-binary public key.
+`thread-keep update --require-complete` and `thread-keep indexers list` are implemented. `pack install` is an explicit shallow pip wrapper available from a PyPI installation; `init` and `update` perform no pack network download.
 
-### Signed official manifest
+### PyPI wheel and raw release artifacts
 
-The release manifest is an envelope rather than a JSON canonicalization scheme:
-
-~~~json
-{
-  "payload": "base64-encoded raw manifest JSON bytes",
-  "signature": "base64-encoded Ed25519 signature over payload bytes"
-}
-~~~
-
-The decoded payload has `schema_version: 1` and one or more official pack entries. Each entry identifies a pack ID, pack version, protocol version, and assets. Each asset contains `goos`, `goarch`, the official HTTPS release URL, exact byte `size`, and lowercase `sha256`. The release binary gets its base64 public key through `make release-build THREAD_KEEP_MANIFEST_PUBLIC_KEY_B64=...`; the private key is secure release infrastructure input, never repository content. `cmd/thread-keep-sign-manifest` signs a supplied raw payload and emits only the envelope.
+Each core platform wheel contains the native CLI and MCP server. Each selected pack platform wheel contains exactly one official pack executable for the same target and version; `thread-keep[all]` selects all six. GitHub Releases publish the target-qualified binaries individually plus `checksums.txt` for manual and operational use. Those raw artifacts are not application-signed, and their adjacent checksums are corruption evidence rather than an independent authenticity proof.
 
 Status JSON gains:
 
@@ -323,7 +314,7 @@ UpdateResult gains the same coverage summary. Scripts branch on coverage_incompl
 - [x] Go only: built-in Go produces indexed complete coverage.
 - [x] Mixed repository with the TypeScript pack: Go and TypeScript projections can commit.
 - [x] Missing pack: Go is fresh, the detected external language is missing_pack, search excludes it, and commit rejects.
-- [x] JavaScript, Python, Java, Kotlin, and Rust pack units, fixed-path catalog, signed-manifest selection, and missing-coverage behavior are verified locally. The added mixed-language Docker E2E scenarios are deferred until the existing execution quota permits them.
+- [x] JavaScript, Python, Java, Kotlin, and Rust pack units, PyPI-distribution/fixed-path resolution, and missing-coverage behavior are verified locally. Mixed-language Docker E2E scenarios cover every official pack.
 - [x] Strict update: incomplete coverage persists and update --require-complete returns coverage_incomplete.
 - [x] Adapter failure and protocol rejection preserve the failed language projection and record failed coverage.
 - [x] Cross-language identity: equivalent names in Go, TypeScript, JavaScript, Python, Java, Kotlin, and Rust have distinct keys.
@@ -338,14 +329,14 @@ UpdateResult gains the same coverage summary. Scripts branch on coverage_incompl
 4. Add subprocess pack runner with a fake local pack for protocol, timeout, and failure tests.
 5. Add CLI coverage fields, require-complete, commit gate, and error contracts.
 6. Implement official TypeScript, JavaScript, Python, Java, Kotlin, and Rust Tree-sitter packs and mixed-repository Docker E2E fixtures. [implemented; Docker execution remains quota-deferred]
-7. Add explicit official-pack installation, signed-manifest authentication, checksum verification, and target-platform handling. [implemented]
+7. Publish a lightweight core plus six exact-version optional PyPI pack distributions, and publish unsigned target binaries plus checksums for manual use. [implemented]
 
 No Tree-sitter library enters the Go core. It appears only in separate external-pack dependency graphs.
 
 ## Risks and constraints
 
 - Parser drift: record pack ID/version and require reindex after extraction-schema upgrades.
-- Untrusted execution: repository-defined executables are forbidden. The installer accepts only a release-binary-verified signed manifest and official GitHub Release/CDN redirects, verifies exact artifact size and SHA-256, and atomically publishes without replacing an executable target. Release-key and asset provisioning remain secure release-infrastructure work.
+- Untrusted execution: repository-defined executables are forbidden. Supported local packs are exact-version target-qualified PyPI distributions; manual fixed-path packs are explicit user configuration and are never discovered from repository content. Only the explicit `pack install` pip wrapper performs a network-capable install.
 - Mixed freshness: partial projections aid exploration but are never committable history.
 - Migration correctness: immutable v1 objects are never rewritten; aliases preserve history.
 - Performance: explicit update may start local processes; no daemon or watcher is introduced.

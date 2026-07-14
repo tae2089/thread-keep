@@ -30,20 +30,6 @@ export const TARGETS = Object.freeze(
   releaseConfig.targets.map((target) => Object.freeze({ ...target })),
 );
 
-export function validateSigningKeyPair(publicKeyBase64, privateKeyBase64) {
-  const publicKey = Buffer.from(String(publicKeyBase64 || "").trim(), "base64");
-  const privateKey = Buffer.from(String(privateKeyBase64 || "").trim(), "base64");
-  if (publicKey.length !== 32) {
-    throw new Error("manifest public key must be a base64 Ed25519 public key");
-  }
-  if (privateKey.length !== 64) {
-    throw new Error("manifest private key must be a base64 Go Ed25519 private key");
-  }
-  if (!privateKey.subarray(32).equals(publicKey)) {
-    throw new Error("manifest signing key pair does not match");
-  }
-}
-
 function executableExtension(goos) {
   return goos === "windows" ? ".exe" : "";
 }
@@ -126,10 +112,6 @@ async function validateStagedArtifacts(artifactsDir) {
   return artifacts;
 }
 
-async function writeJSON(file, value) {
-  await writeFile(file, `${JSON.stringify(value, null, 2)}\n`);
-}
-
 export async function assembleRelease({
   artifactsDir,
   outDir,
@@ -152,25 +134,4 @@ export async function assembleRelease({
     checksumLines.push(`${artifacts.get(name).sha256}  ${name}`);
   }
   await writeFile(path.join(assetsDir, "checksums.txt"), `${checksumLines.join("\n")}\n`);
-
-  const payload = {
-    schema_version: 1,
-    packs: PACKS.map((pack) => ({
-      id: pack.id,
-      version,
-      protocol_version: 1,
-      assets: TARGETS.map((target) => {
-        const name = assetName(pack.id, target);
-        const artifact = artifacts.get(name);
-        return {
-          goos: target.goos,
-          goarch: target.goarch,
-          url: `https://github.com/${repository}/releases/download/${tag}/${name}`,
-          size: artifact.size,
-          sha256: artifact.sha256,
-        };
-      }),
-    })),
-  };
-  await writeJSON(path.join(assetsDir, "thread-keep-indexers-manifest-v1.payload.json"), payload);
 }

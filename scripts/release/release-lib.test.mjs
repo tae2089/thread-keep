@@ -1,18 +1,17 @@
 import assert from "node:assert/strict";
-import { createHash, generateKeyPairSync } from "node:crypto";
 import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import {
+import * as releaseModule from "./release-lib.mjs";
+
+const {
   ALL_BINARIES,
-  PACKS,
   TARGETS,
   assembleRelease,
   stageTargetArtifacts,
-  validateSigningKeyPair,
-} from "./release-lib.mjs";
+} = releaseModule;
 
 async function withTempDir(runTest) {
   const root = await mkdtemp(path.join(os.tmpdir(), "thread-keep-release-"));
@@ -75,7 +74,7 @@ test("stageTargetArtifacts fails if a required GoReleaser binary is missing", as
   });
 });
 
-test("assembleRelease creates GitHub assets without package-registry output", async () => {
+test("assembleRelease creates unsigned GitHub assets and checksums without a manifest", async () => {
   await withTempDir(async (root) => {
     const artifactsDir = path.join(root, "artifacts");
     const outDir = path.join(root, "release");
@@ -90,25 +89,12 @@ test("assembleRelease creates GitHub assets without package-registry output", as
       version: "1.2.3",
     });
 
-    const payload = JSON.parse(await readFile(path.join(outDir, "assets", "thread-keep-indexers-manifest-v1.payload.json"), "utf8"));
-    assert.equal(payload.schema_version, 1);
-    assert.equal(payload.packs.length, PACKS.length);
-    for (const pack of payload.packs) {
-      assert.equal(pack.version, "1.2.3");
-      assert.equal(pack.protocol_version, 1);
-      assert.equal(pack.assets.length, TARGETS.length);
-      for (const asset of pack.assets) {
-        const target = TARGETS.find((candidate) => candidate.goos === asset.goos && candidate.goarch === asset.goarch);
-        assert.ok(target);
-        const contents = Buffer.from(`${pack.id}:${target.id}`);
-        assert.equal(asset.size, contents.length);
-        assert.equal(asset.sha256, createHash("sha256").update(contents).digest("hex"));
-        assert.equal(asset.url, `https://github.com/tae2089/thread-keep/releases/download/v1.2.3/${pack.id}_${asset.goos}_${asset.goarch}${asset.goos === "windows" ? ".exe" : ""}`);
-      }
-    }
-
     const checksums = (await readFile(path.join(outDir, "assets", "checksums.txt"), "utf8")).trim().split("\n");
     assert.equal(checksums.length, ALL_BINARIES.length * TARGETS.length);
+    await assert.rejects(
+      stat(path.join(outDir, "assets", "thread-keep-indexers-manifest-v1.payload.json")),
+      { code: "ENOENT" },
+    );
     await assert.rejects(stat(path.join(outDir, "npm")), { code: "ENOENT" });
   });
 });
@@ -133,30 +119,8 @@ test("assembleRelease rejects an incomplete target before writing publishable me
   });
 });
 
-test("validateSigningKeyPair accepts matching Ed25519 Go key material", () => {
-  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
-  const publicJWK = publicKey.export({ format: "jwk" });
-  const privateJWK = privateKey.export({ format: "jwk" });
-  const rawPublic = Buffer.from(publicJWK.x, "base64url");
-  const goPrivate = Buffer.concat([
-    Buffer.from(privateJWK.d, "base64url"),
-    rawPublic,
-  ]);
-
-  assert.doesNotThrow(() => validateSigningKeyPair(
-    rawPublic.toString("base64"),
-    goPrivate.toString("base64"),
-  ));
-});
-
-test("validateSigningKeyPair rejects a public/private mismatch", () => {
-  const privateKey = Buffer.alloc(64, 1);
-  const publicKey = Buffer.alloc(32, 2);
-
-  assert.throws(
-    () => validateSigningKeyPair(publicKey.toString("base64"), privateKey.toString("base64")),
-    /manifest signing key pair does not match/,
-  );
+test("release assembly exposes no manifest signing helper", () => {
+  assert.equal("validateSigningKeyPair" in releaseModule, false);
 });
 
 test("every native release target declares one platform wheel tag without npm metadata", () => {

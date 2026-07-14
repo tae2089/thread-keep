@@ -20,8 +20,6 @@ type Service struct {
 	layout           store.Layout
 	store            *store.Store
 	indexer          indexCoordinator
-	installDetected  func(context.Context, string) ([]domain.IndexerStatus, error)
-	syncDetected     func(context.Context, string, string) ([]domain.IndexerStatus, error)
 	discover         stateDiscoverer
 }
 
@@ -130,8 +128,6 @@ func Open(ctx context.Context, workingDirectory string) (*Service, error) {
 		commonDir:        state.CommonDir,
 		layout:           store.NewLayout(state.CommonDir),
 		indexer:          indexing.NewCoordinator(),
-		installDetected:  indexing.InstallDetected,
-		syncDetected:     indexing.SyncDetected,
 		discover:         gitrepo.Discover,
 	}, nil
 }
@@ -155,28 +151,6 @@ func (s *Service) Indexers(ctx context.Context) ([]domain.IndexerStatus, error) 
 	statuses, err := indexing.List(ctx, s.workingDirectory)
 	if err != nil {
 		return nil, domain.NewError(domain.CodeLocalStorage, fmt.Errorf("inspect installed indexers: %w", err))
-	}
-	return statuses, nil
-}
-
-func (s *Service) InstallIndexers(ctx context.Context) ([]domain.IndexerStatus, error) {
-	if s.installDetected == nil {
-		return nil, domain.NewError(domain.CodeLocalStorage, errors.New("indexer installer is not configured"))
-	}
-	statuses, err := s.installDetected(ctx, s.workingDirectory)
-	if err != nil {
-		return nil, err
-	}
-	return statuses, nil
-}
-
-func (s *Service) SyncIndexers(ctx context.Context, version string) ([]domain.IndexerStatus, error) {
-	if s.syncDetected == nil {
-		return nil, domain.NewError(domain.CodeLocalStorage, errors.New("indexer sync is not configured"))
-	}
-	statuses, err := s.syncDetected(ctx, s.workingDirectory, version)
-	if err != nil {
-		return nil, err
 	}
 	return statuses, nil
 }

@@ -16,7 +16,6 @@ builds:
       - sqlite_omit_load_extension
     ldflags:
       - -s -w
-      - -X github.com/tae2089/thread-keep/internal/indexing.officialManifestPublicKeyBase64={{ .Env.THREAD_KEEP_MANIFEST_PUBLIC_KEY_B64 }}
 
   - id: thread-keep-mcp
     main: ./cmd/thread-keep-mcp

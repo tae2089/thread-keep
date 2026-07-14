@@ -24,8 +24,8 @@ const (
 )
 
 const (
-	bundledPackDirectoryEnv = "THREAD_KEEP_BUNDLED_PACK_DIR"
-	bundledPackVersionEnv   = "THREAD_KEEP_BUNDLED_PACK_VERSION"
+	pypiPacksEnv      = "THREAD_KEEP_PYPI_PACKS"
+	packageVersionEnv = "THREAD_KEEP_PACKAGE_VERSION"
 )
 
 type ProcessIndexer struct {
@@ -87,7 +87,6 @@ func List(ctx context.Context, root string) ([]domain.IndexerStatus, error) {
 			status.State = domain.IndexerInstalled
 			status.Path = pack.Path
 			status.Version = pack.Descriptor.Version
-			status.SHA256 = pack.SHA256
 		}
 		statuses = append(statuses, status)
 	}
@@ -107,7 +106,7 @@ func findInstalledPack(language Language) (installedPack, bool, error) {
 	if err != nil {
 		return installedPack{}, false, fmt.Errorf("locate user configuration directory: %w", err)
 	}
-	return resolveAvailablePack(configDir, os.Getenv(bundledPackDirectoryEnv), os.Getenv(bundledPackVersionEnv), language)
+	return resolveAvailablePack(configDir, os.Getenv(pypiPacksEnv), os.Getenv(packageVersionEnv), language)
 }
 
 func (p ProcessIndexer) Descriptor() Descriptor {

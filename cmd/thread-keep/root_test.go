@@ -20,7 +20,7 @@ func TestRootRegistersExpectedCommands(t *testing.T) {
 		names = append(names, command.Name())
 	}
 	sort.Strings(names)
-	want := []string{"candidate", "commit", "context", "diff", "indexers", "init", "landing", "log", "note", "rebuild", "remote", "search", "status", "update"}
+	want := []string{"candidate", "commit", "context", "diff", "indexers", "init", "landing", "log", "note", "pack", "rebuild", "remote", "search", "status", "update"}
 	if len(names) != len(want) {
 		t.Fatalf("command count = %d, want %d: %v", len(names), len(want), names)
 	}
@@ -31,6 +31,21 @@ func TestRootRegistersExpectedCommands(t *testing.T) {
 	}
 	if root.PersistentFlags().Lookup("repo") == nil || root.PersistentFlags().Lookup("json") == nil {
 		t.Fatal("root must register repository and JSON flags")
+	}
+}
+
+func TestIndexerCommandsAreInspectionOnly(t *testing.T) {
+	root := NewRoot(cli.NewRunner(app.Open))
+	indexers, _, err := root.Find([]string{"indexers"})
+	if err != nil {
+		t.Fatalf("find indexers command: %v", err)
+	}
+	var names []string
+	for _, command := range indexers.Commands() {
+		names = append(names, command.Name())
+	}
+	if len(names) != 1 || names[0] != "list" {
+		t.Fatalf("indexers commands = %v, want [list]", names)
 	}
 }
 

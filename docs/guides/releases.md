@@ -1,16 +1,16 @@
 # Release operations
 
-Thread Keep uses GitHub Actions for CI and tag-driven releases. GoReleaser OSS builds every executable on its native target because the SQLite FTS5 dependency requires CGO. The release workflow then publishes raw GitHub assets, npm packages, platform-specific PyPI wheels, and container images from those target-qualified binaries.
+Thread Keep uses GitHub Actions for CI and tag-driven releases. GoReleaser OSS builds every executable on its native target because the SQLite FTS5 dependency requires CGO. The release workflow then publishes raw GitHub assets, platform-specific PyPI wheels, and container images from those target-qualified binaries.
 
 ## Supported targets
 
-| Go target | npm target | PyPI wheel platform tag | GitHub runner |
-| --- | --- | --- | --- |
-| `linux/amd64` | `linux-x64` (glibc) | `manylinux_2_39_x86_64` | `ubuntu-24.04` |
-| `linux/arm64` | `linux-arm64` (glibc) | `manylinux_2_39_aarch64` | `ubuntu-24.04-arm` |
-| `darwin/amd64` | `darwin-x64` | `macosx_15_0_x86_64` | `macos-15-intel` |
-| `darwin/arm64` | `darwin-arm64` | `macosx_15_0_arm64` | `macos-15` |
-| `windows/amd64` | `win32-x64` | `win_amd64` | `windows-2025` |
+| Go target | PyPI wheel platform tag | GitHub runner |
+| --- | --- | --- |
+| `linux/amd64` | `manylinux_2_39_x86_64` | `ubuntu-24.04` |
+| `linux/arm64` | `manylinux_2_39_aarch64` | `ubuntu-24.04-arm` |
+| `darwin/amd64` | `macosx_15_0_x86_64` | `macos-15-intel` |
+| `darwin/arm64` | `macosx_15_0_arm64` | `macos-15` |
+| `windows/amd64` | `win_amd64` | `windows-2025` |
 
 Windows arm64 and Linux musl are not release targets yet. macOS binaries are not code-signed or notarized in this workflow.
 
@@ -30,7 +30,7 @@ Each image receives the release version and `latest` tags. The GoReleaser runtim
 
 1. Go tests, including every language-pack module.
 2. Go vet and runtime binary builds.
-3. npm launcher, PyPI wheel/launcher, and release-assembly tests.
+3. PyPI wheel/launcher and release-assembly tests.
 4. GoReleaser v2.17 configuration validation.
 5. Docker E2E after the quality job passes.
 
@@ -42,14 +42,9 @@ Complete these steps before pushing the first release tag:
 
 1. Generate an Ed25519 key pair in secure release infrastructure. Store only the base64 32-byte public key as the GitHub Actions repository variable `THREAD_KEEP_MANIFEST_PUBLIC_KEY_B64`.
 2. Store the matching base64 64-byte Go Ed25519 private key as the Actions secret `THREAD_KEEP_MANIFEST_PRIVATE_KEY_B64`. Never place it in the repository, workflow input, command history, or logs.
-3. Create a protected GitHub Actions environment named `npm` and require the desired deployment approvals.
-4. Reserve and bootstrap these npm packages: `thread-keep`, `thread-keep-linux-x64`, `thread-keep-linux-arm64`, `thread-keep-darwin-x64`, `thread-keep-darwin-arm64`, and `thread-keep-win32-x64`.
-5. For the first publish only, add a granular npm automation token with publish access as the Actions secret `NPM_TOKEN`.
-6. After the packages exist, configure npm trusted publishing for each package with repository `tae2089/thread-keep`, workflow `release.yml`, and environment `npm`. Remove `NPM_TOKEN` after an OIDC release succeeds, then disallow token publishing in npm package settings.
-7. Create a protected GitHub Actions environment named `pypi`. Reserve or create the PyPI project `thread-keep`, then configure its GitHub Trusted Publisher for owner `tae2089`, repository `thread-keep`, workflow `release.yml`, and environment `pypi`. No PyPI API token is stored in GitHub.
-8. After the first container publication, set each GHCR package to public visibility and confirm it inherits or grants Actions access to `tae2089/thread-keep`. Container publication uses the job-scoped `GITHUB_TOKEN`; it needs no registry secret.
-
-npm trusted publishing requires GitHub-hosted runners and `id-token: write`. The workflow uses Node 24 and publishes provenance. The package `repository.url` is fixed to the official GitHub repository because npm validates that identity for trusted publishing.
+3. Create a protected GitHub Actions environment named `release` and require the desired deployment approvals for GitHub Release publication.
+4. Create a protected GitHub Actions environment named `pypi`. Reserve or create the PyPI project `thread-keep`, then configure its GitHub Trusted Publisher for owner `tae2089`, repository `thread-keep`, workflow `release.yml`, and environment `pypi`. No PyPI API token is stored in GitHub.
+5. After the first container publication, set each GHCR package to public visibility and confirm it inherits or grants Actions access to `tae2089/thread-keep`. Container publication uses the job-scoped `GITHUB_TOKEN`; it needs no registry secret.
 
 ## Release flow
 
@@ -68,15 +63,13 @@ The workflow performs these gates in order:
 4. Generate SHA-256 checksums, the pack-manifest payload, and five deterministic platform wheels from the staged GoReleaser artifacts.
 5. Validate every wheel archive, including its platform tag, packaged core binaries, six official packs, executable modes, entry points, and `RECORD` hashes.
 6. Verify the configured public/private signing keys match, sign the manifest with the existing Go signer, and delete the temporary private-key file.
-7. Dry-run every npm tarball.
-8. Publish the GitHub Release.
-9. Publish all five platform npm packages, then publish the `thread-keep` meta package last.
-10. Verify any existing PyPI wheel filename and SHA-256 before using Trusted Publishing to upload missing wheels.
-11. Independently cross-compile the container binaries for Linux amd64/arm64 and let GoReleaser `dockers_v2` publish the three GHCR manifests.
+7. Publish or byte-for-byte verify the GitHub Release.
+8. Verify any existing PyPI wheel filename and SHA-256 before using Trusted Publishing to upload missing wheels.
+9. Independently cross-compile the container binaries for Linux amd64/arm64 and let GoReleaser `dockers_v2` publish the three GHCR manifests.
 
-Publishing the npm meta package last prevents users from receiving a version whose platform package was never published. A rerun accepts existing GitHub/npm artifacts only when their full asset list, checksums, and npm tarball integrity exactly match the rebuilt output. PyPI recovery likewise permits `skip-existing` only after every existing wheel digest matches the deterministic local rebuild. Partial matching publication can resume; any mismatch fails before upload.
+A rerun accepts existing GitHub artifacts only when their full asset list and checksums exactly match the rebuilt output. PyPI recovery permits `skip-existing` only after every existing wheel digest matches the deterministic local rebuild. Partial matching publication can resume; any mismatch fails before upload.
 
-Container publication runs after GitHub and npm publication. If it fails, those earlier artifacts remain valid; inspect any GHCR manifest already pushed and rerun the failed container job. The workflow never deletes registry state during recovery.
+PyPI and container publication run independently after the GitHub Release job. If either fails, the GitHub Release remains valid and the other job is not rolled back. Inspect any already-published immutable artifact before rerunning the failed job; the workflow never deletes registry state during recovery.
 
 ## Artifact contract
 
@@ -92,15 +85,6 @@ thread-keep-indexers-manifest-v1.json
 
 The signed manifest contains the release SemVer plus exact target URLs, byte sizes, and SHA-256 values for all six language packs. GoReleaser injects that same SemVer into every pack's runtime descriptor, and the release `thread-keep` binary embeds only the matching public verification key. Managed installs retain immutable digest-addressed binaries and atomically switch a small activation document during `indexers sync`.
 
-The npm meta package exposes the two local user-facing commands:
-
-```text
-thread-keep
-thread-keep-mcp
-```
-
-Operational server, coordinator, and runner binaries remain GitHub Release assets and container targets so every npm CLI installation does not carry those larger binaries. The npm package uses exact-version `optionalDependencies` plus npm `os`, `cpu`, and Linux `libc` filters. No lifecycle install script or secondary binary download is used.
-
 The single PyPI project publishes five files for the same release version, for example:
 
 ```text
@@ -111,7 +95,7 @@ thread_keep-1.2.3-py3-none-win_amd64.whl
 
 pip selects one compatible wheel. Each wheel contains `thread-keep`, `thread-keep-mcp`, and all six official packs. Its Python console-script adapter passes the bundled directory and exact release version to the Go resolver; a signed managed activation or legacy local pack remains higher priority. Wheels are binary-only and require Python 3.9 or newer. No sdist is published because one source archive cannot reproduce all target-qualified CGO binaries.
 
-The repository and all generated npm packages declare the SPDX license identifier `MIT`. The release assembler copies the repository-root `LICENSE` into every platform and meta package.
+The repository and every generated wheel declare the SPDX license identifier `MIT`. The wheel builder copies the repository-root `LICENSE` into every platform wheel.
 
 Pull a published component by release version:
 
@@ -150,8 +134,6 @@ The container configuration additionally requires Linux CGO cross-compilers plus
 - [GoReleaser GitHub Actions](https://www.goreleaser.com/customization/ci/actions/)
 - [GoReleaser CGO limitation](https://www.goreleaser.com/resources/limitations/cgo/)
 - [GoReleaser Docker v2](https://goreleaser.com/customization/package/dockers_v2/)
-- [npm package `os`, `cpu`, `libc`, and optional dependencies](https://docs.npmjs.com/files/package.json/)
-- [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/)
 - [PyPA wheel binary distribution format](https://packaging.python.org/en/latest/specifications/binary-distribution-format/)
 - [PyPI Trusted Publishing](https://docs.pypi.org/trusted-publishers/using-a-publisher/)
 - [GoReleaser UV builder and `py3-none-any` limitation](https://www.goreleaser.com/customization/builds/builders/uv/)

@@ -26,8 +26,6 @@ export const ALL_BINARIES = Object.freeze([
   ...PACKS.map((pack) => pack.id),
 ]);
 
-export const NPM_BINARIES = Object.freeze([...releaseConfig.npm_binaries]);
-
 export const TARGETS = Object.freeze(
   releaseConfig.targets.map((target) => Object.freeze({ ...target })),
 );
@@ -52,10 +50,6 @@ function executableExtension(goos) {
 
 function assetName(binary, target) {
   return `${binary}_${target.goos}_${target.goarch}${executableExtension(target.goos)}`;
-}
-
-function packageName(target) {
-  return `thread-keep-${target.npmOS}-${target.npmCPU}`;
 }
 
 function assertVersion(version, tag) {
@@ -132,71 +126,12 @@ async function validateStagedArtifacts(artifactsDir) {
   return artifacts;
 }
 
-function repositoryMetadata(repository) {
-  return {
-    type: "git",
-    url: `git+https://github.com/${repository}.git`,
-  };
-}
-
 async function writeJSON(file, value) {
   await writeFile(file, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-async function createPlatformPackage({ artifactsDir, licenseFile, npmDir, repository, target, version }) {
-  const name = packageName(target);
-  const root = path.join(npmDir, name);
-  const binDir = path.join(root, "bin");
-  await mkdir(binDir, { recursive: true });
-  const manifest = {
-    name,
-    version,
-    description: `Thread Keep native binaries for ${target.npmOS}-${target.npmCPU}`,
-    repository: repositoryMetadata(repository),
-    license: "MIT",
-    os: [target.npmOS],
-    cpu: [target.npmCPU],
-    files: ["bin", "LICENSE"],
-    publishConfig: { access: "public", provenance: true },
-  };
-  if (target.goos === "linux") {
-    manifest.libc = ["glibc"];
-  }
-  await writeJSON(path.join(root, "package.json"), manifest);
-  await cp(licenseFile, path.join(root, "LICENSE"));
-  for (const binary of NPM_BINARIES) {
-    const extension = executableExtension(target.goos);
-    const source = path.join(artifactsDir, assetName(binary, target));
-    const destination = path.join(binDir, `${binary}${extension}`);
-    await cp(source, destination);
-    if (target.goos !== "windows") {
-      await chmod(destination, 0o755);
-    }
-  }
-}
-
-async function createMetaPackage({ licenseFile, metaTemplateDir, npmDir, repository, version }) {
-  const root = path.join(npmDir, "thread-keep");
-  await cp(metaTemplateDir, root, { recursive: true });
-  const manifestPath = path.join(root, "package.json");
-  const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
-  manifest.version = version;
-  manifest.repository = repositoryMetadata(repository);
-  manifest.license = "MIT";
-  if (!manifest.files.includes("LICENSE")) {
-    manifest.files.push("LICENSE");
-  }
-  manifest.optionalDependencies = Object.fromEntries(
-    TARGETS.map((target) => [packageName(target), version]),
-  );
-  await writeJSON(manifestPath, manifest);
-  await cp(licenseFile, path.join(root, "LICENSE"));
-}
-
 export async function assembleRelease({
   artifactsDir,
-  licenseFile,
-  metaTemplateDir,
   outDir,
   repository,
   tag,
@@ -206,16 +141,10 @@ export async function assembleRelease({
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
     throw new Error(`invalid GitHub repository: ${repository}`);
   }
-  const licenseInfo = await stat(licenseFile).catch(() => null);
-  if (!licenseInfo?.isFile()) {
-    throw new Error("release license file is missing");
-  }
   const artifacts = await validateStagedArtifacts(artifactsDir);
   await rm(outDir, { recursive: true, force: true });
   const assetsDir = path.join(outDir, "assets");
-  const npmDir = path.join(outDir, "npm");
   await mkdir(assetsDir, { recursive: true });
-  await mkdir(npmDir, { recursive: true });
 
   const checksumLines = [];
   for (const name of [...artifacts.keys()].sort()) {
@@ -244,9 +173,4 @@ export async function assembleRelease({
     })),
   };
   await writeJSON(path.join(assetsDir, "thread-keep-indexers-manifest-v1.payload.json"), payload);
-
-  for (const target of TARGETS) {
-    await createPlatformPackage({ artifactsDir, licenseFile, npmDir, repository, target, version });
-  }
-  await createMetaPackage({ licenseFile, metaTemplateDir, npmDir, repository, version });
 }

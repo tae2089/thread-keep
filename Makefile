@@ -43,7 +43,6 @@ release-build:
 	$(GO_ENV) go build -trimpath -tags '$(GO_TAGS)' -ldflags "-X github.com/tae2089/thread-keep/internal/indexing.officialManifestPublicKeyBase64=$(THREAD_KEEP_MANIFEST_PUBLIC_KEY_B64)" -o bin/thread-keep ./cmd/thread-keep
 
 release-test:
-	npm test --prefix npm/thread-keep
 	node --test scripts/release/*.test.mjs
 	python3 -m unittest scripts/release/test_build_wheels.py scripts/release/test_pypi_launcher.py
 

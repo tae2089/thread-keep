@@ -7,7 +7,6 @@ import test from "node:test";
 
 import {
   ALL_BINARIES,
-  NPM_BINARIES,
   PACKS,
   TARGETS,
   assembleRelease,
@@ -76,20 +75,16 @@ test("stageTargetArtifacts fails if a required GoReleaser binary is missing", as
   });
 });
 
-test("assembleRelease creates checksums, a complete pack manifest, and npm packages", async () => {
+test("assembleRelease creates GitHub assets without package-registry output", async () => {
   await withTempDir(async (root) => {
     const artifactsDir = path.join(root, "artifacts");
-    const licenseFile = path.join(root, "LICENSE");
     const outDir = path.join(root, "release");
     await mkdir(artifactsDir, { recursive: true });
     await seedStagedArtifacts(artifactsDir);
-    await writeFile(licenseFile, "test license\n");
 
     await assembleRelease({
       artifactsDir,
-      licenseFile,
       outDir,
-      metaTemplateDir: path.resolve("npm/thread-keep"),
       repository: "tae2089/thread-keep",
       tag: "v1.2.3",
       version: "1.2.3",
@@ -114,77 +109,26 @@ test("assembleRelease creates checksums, a complete pack manifest, and npm packa
 
     const checksums = (await readFile(path.join(outDir, "assets", "checksums.txt"), "utf8")).trim().split("\n");
     assert.equal(checksums.length, ALL_BINARIES.length * TARGETS.length);
-
-    const metaPackage = JSON.parse(await readFile(path.join(outDir, "npm", "thread-keep", "package.json"), "utf8"));
-    assert.equal(metaPackage.version, "1.2.3");
-    assert.equal(metaPackage.license, "MIT");
-    assert.equal(await readFile(path.join(outDir, "npm", "thread-keep", "LICENSE"), "utf8"), "test license\n");
-    assert.deepEqual(Object.values(metaPackage.optionalDependencies), Array(TARGETS.length).fill("1.2.3"));
-
-    for (const target of TARGETS) {
-      const packageName = `thread-keep-${target.npmOS}-${target.npmCPU}`;
-      const packageRoot = path.join(outDir, "npm", packageName);
-      const packageJSON = JSON.parse(await readFile(path.join(packageRoot, "package.json"), "utf8"));
-      assert.deepEqual(packageJSON.os, [target.npmOS]);
-      assert.deepEqual(packageJSON.cpu, [target.npmCPU]);
-      assert.equal(packageJSON.license, "MIT");
-      assert.equal(await readFile(path.join(packageRoot, "LICENSE"), "utf8"), "test license\n");
-      if (target.goos === "linux") {
-        assert.deepEqual(packageJSON.libc, ["glibc"]);
-      } else {
-        assert.equal("libc" in packageJSON, false);
-      }
-      for (const binary of NPM_BINARIES) {
-        const extension = target.goos === "windows" ? ".exe" : "";
-        assert.equal((await stat(path.join(packageRoot, "bin", `${binary}${extension}`))).isFile(), true);
-      }
-      const serverExtension = target.goos === "windows" ? ".exe" : "";
-      await assert.rejects(stat(path.join(packageRoot, "bin", `thread-keep-server${serverExtension}`)));
-    }
+    await assert.rejects(stat(path.join(outDir, "npm")), { code: "ENOENT" });
   });
 });
 
 test("assembleRelease rejects an incomplete target before writing publishable metadata", async () => {
   await withTempDir(async (root) => {
     const artifactsDir = path.join(root, "artifacts");
-    const licenseFile = path.join(root, "LICENSE");
     await mkdir(artifactsDir, { recursive: true });
     await seedStagedArtifacts(artifactsDir);
-    await writeFile(licenseFile, "test license\n");
     await rm(path.join(artifactsDir, "thread-keep-index-rust_linux_amd64"));
 
     await assert.rejects(
       assembleRelease({
         artifactsDir,
-        licenseFile,
         outDir: path.join(root, "release"),
-        metaTemplateDir: path.resolve("npm/thread-keep"),
         repository: "tae2089/thread-keep",
         tag: "v1.2.3",
         version: "1.2.3",
       }),
       /missing staged artifact.*thread-keep-index-rust_linux_amd64/,
-    );
-  });
-});
-
-test("assembleRelease rejects a missing license before creating packages", async () => {
-  await withTempDir(async (root) => {
-    const artifactsDir = path.join(root, "artifacts");
-    await mkdir(artifactsDir, { recursive: true });
-    await seedStagedArtifacts(artifactsDir);
-
-    await assert.rejects(
-      assembleRelease({
-        artifactsDir,
-        licenseFile: path.join(root, "LICENSE"),
-        outDir: path.join(root, "release"),
-        metaTemplateDir: path.resolve("npm/thread-keep"),
-        repository: "tae2089/thread-keep",
-        tag: "v1.2.3",
-        version: "1.2.3",
-      }),
-      /release license file is missing/,
     );
   });
 });
@@ -215,7 +159,7 @@ test("validateSigningKeyPair rejects a public/private mismatch", () => {
   );
 });
 
-test("every native release target declares one platform wheel tag", () => {
+test("every native release target declares one platform wheel tag without npm metadata", () => {
   assert.deepEqual(
     TARGETS.map((target) => target.wheelTag),
     [
@@ -226,4 +170,8 @@ test("every native release target declares one platform wheel tag", () => {
       "win_amd64",
     ],
   );
+  for (const target of TARGETS) {
+    assert.equal("npmOS" in target, false);
+    assert.equal("npmCPU" in target, false);
+  }
 });

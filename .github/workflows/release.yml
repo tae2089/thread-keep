@@ -144,13 +144,12 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  publish:
+  release:
     needs: build
     runs-on: ubuntu-24.04
-    environment: npm
+    environment: release
     permissions:
       contents: write
-      id-token: write
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
@@ -163,11 +162,10 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Set up Node.js for npm publishing
+      - name: Set up Node.js for release tooling
         uses: actions/setup-node@v6
         with:
           node-version: "24"
-          registry-url: https://registry.npmjs.org
           package-manager-cache: false
 
       - name: Set up Python for wheel assembly
@@ -189,12 +187,10 @@ jobs:
           [[ "$GITHUB_REF_NAME" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
           echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Assemble release and npm packages
+      - name: Assemble GitHub release assets
         run: >-
           node scripts/release/assemble-release.mjs
           --artifacts=release-staging
-          --license=LICENSE
-          --meta=npm/thread-keep
           --out=release
           --repository=${{ github.repository }}
           --tag=${{ github.ref_name }}
@@ -241,15 +237,6 @@ jobs:
             | sed 's#  release/assets/#  #' \
             >> release/assets/checksums.txt
 
-      - name: Validate npm tarballs
-        shell: bash
-        run: |
-          set -euo pipefail
-          for package_dir in release/npm/thread-keep-*; do
-            npm pack "./$package_dir" --dry-run --json >/dev/null
-          done
-          npm pack ./release/npm/thread-keep --dry-run --json >/dev/null
-
       - name: Publish or verify GitHub Release
         shell: bash
         env:
@@ -273,34 +260,6 @@ jobs:
               --title "${{ github.ref_name }}"
           fi
 
-      - name: Publish or verify npm packages
-        shell: bash
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          set -euo pipefail
-          publish_or_verify() {
-            package_dir="$1"
-            package_json="$(npm pack "./$package_dir" --dry-run --json)"
-            local_integrity="$(node -e 'console.log(JSON.parse(process.argv[1])[0].integrity)' "$package_json")"
-            package_name="$(node -p "require('./$package_dir/package.json').name")"
-            package_version="$(node -p "require('./$package_dir/package.json').version")"
-            if remote_json="$(npm view "$package_name@$package_version" dist.integrity --json 2>/dev/null)"; then
-              remote_integrity="$(node -e 'console.log(JSON.parse(process.argv[1]))' "$remote_json")"
-              if [[ "$local_integrity" != "$remote_integrity" ]]; then
-                echo "published npm integrity differs for $package_name@$package_version" >&2
-                return 1
-              fi
-              echo "verified existing $package_name@$package_version"
-              return 0
-            fi
-            npm publish "./$package_dir" --access public --provenance
-          }
-          for package_dir in release/npm/thread-keep-*; do
-            publish_or_verify "$package_dir"
-          done
-          publish_or_verify release/npm/thread-keep
-
       - name: Upload PyPI wheels
         uses: actions/upload-artifact@v4
         with:
@@ -310,7 +269,7 @@ jobs:
           retention-days: 1
 
   pypi:
-    needs: publish
+    needs: release
     runs-on: ubuntu-24.04
     environment:
       name: pypi
@@ -352,7 +311,7 @@ jobs:
           print-hash: true
 
   containers:
-    needs: publish
+    needs: release
     runs-on: ubuntu-24.04
     permissions:
       contents: read

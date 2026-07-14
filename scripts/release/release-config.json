@@ -6,7 +6,7 @@
     "thread-keep-coordinator",
     "thread-keep-runner"
   ],
-  "npm_binaries": [
+  "wheel_binaries": [
     "thread-keep",
     "thread-keep-mcp"
   ],
@@ -23,40 +23,30 @@
       "id": "linux-x64",
       "goos": "linux",
       "goarch": "amd64",
-      "npmOS": "linux",
-      "npmCPU": "x64",
       "wheelTag": "manylinux_2_39_x86_64"
     },
     {
       "id": "linux-arm64",
       "goos": "linux",
       "goarch": "arm64",
-      "npmOS": "linux",
-      "npmCPU": "arm64",
       "wheelTag": "manylinux_2_39_aarch64"
     },
     {
       "id": "darwin-x64",
       "goos": "darwin",
       "goarch": "amd64",
-      "npmOS": "darwin",
-      "npmCPU": "x64",
       "wheelTag": "macosx_15_0_x86_64"
     },
     {
       "id": "darwin-arm64",
       "goos": "darwin",
       "goarch": "arm64",
-      "npmOS": "darwin",
-      "npmCPU": "arm64",
       "wheelTag": "macosx_15_0_arm64"
     },
     {
       "id": "win32-x64",
       "goos": "windows",
       "goarch": "amd64",
-      "npmOS": "win32",
-      "npmCPU": "x64",
       "wheelTag": "win_amd64"
     }
   ]

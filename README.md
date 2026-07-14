@@ -9,7 +9,7 @@ Thread Keep is a local-first code-context VCS. It indexes Go functions, methods 
 - [Codex setup](docs/guides/codex.md) — MCP configuration and AGENTS.md instructions.
 - [Team server operations](docs/guides/team-server.md) — hosted context remote, GitHub authorization, clustering, maintenance, onboarding.
 - [PR context planning](docs/guides/pr-context-coordinator.md) — Server-owned durable webhook intake, dedicated coordinator and runner processes, Checks, landing, and recovery.
-- [Release operations](docs/guides/releases.md) — GitHub Actions, GoReleaser, signed pack assets, npm, PyPI, and container publishing.
+- [Release operations](docs/guides/releases.md) — GitHub Actions, GoReleaser, signed pack assets, PyPI, and container publishing.
 
 ## Install from PyPI
 
@@ -21,17 +21,7 @@ thread-keep --help
 ```
 
 The Python console scripts execute the packaged native binaries and expose the bundled pack directory only to that process. A pack installed later with `thread-keep indexers sync --detected [--version X.Y.Z]` is activated from the signed managed store and takes precedence over the wheel-bundled copy.
-
-## Install from npm
-
-Published releases can be installed without a Go toolchain. npm selects the matching native package for Linux glibc x64/arm64, macOS x64/arm64, or Windows x64:
-
-```bash
-npm install --global thread-keep
-thread-keep --help
-```
-
-The same package also exposes `thread-keep-mcp`. It contains both platform binaries in npm itself and does not run a postinstall downloader. Operational `thread-keep-server`, `thread-keep-coordinator`, and `thread-keep-runner` binaries remain GitHub Release and container artifacts rather than inflating every npm CLI install. Official language packs remain on the signed `thread-keep indexers install --detected` path described below.
+Operational `thread-keep-server`, `thread-keep-coordinator`, and `thread-keep-runner` binaries remain GitHub Release and container artifacts rather than being bundled into the local CLI wheel.
 
 ## Build
 

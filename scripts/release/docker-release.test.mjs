@@ -64,13 +64,20 @@ test("all released pack binaries report the release SemVer", async () => {
   }
 });
 
-test("tag workflow publishes containers after GitHub and npm artifacts", async () => {
+test("tag workflow publishes PyPI and containers after GitHub Release without npm", async () => {
   const workflow = await readFile(".github/workflows/release.yml", "utf8");
+  assert.match(workflow, /^  release:$/m);
+  assert.match(workflow, /^    environment: release$/m);
+  assert.match(workflow, /^  pypi:\n    needs: release$/m);
   assert.match(workflow, /^  containers:$/m);
-  assert.match(workflow, /^    needs: publish$/m);
+  assert.match(workflow, /^    needs: release$/m);
   assert.match(workflow, /^      packages: write$/m);
   assert.match(workflow, /uses: docker\/login-action@v3/);
   assert.match(workflow, /release --clean --config \.goreleaser\.docker\.yaml/);
+  assert.doesNotMatch(
+    workflow,
+    /NPM_TOKEN|registry\.npmjs\.org|npm publish|npm view|release\/npm|environment: npm|--meta=npm\/thread-keep/,
+  );
 });
 
 test("tag workflow publishes GoReleaser-derived wheels through PyPI Trusted Publishing", async () => {
@@ -78,7 +85,7 @@ test("tag workflow publishes GoReleaser-derived wheels through PyPI Trusted Publ
   assert.match(workflow, /python3 scripts\/release\/build_wheels\.py/);
   assert.match(workflow, /name: pypi-wheels/);
   assert.match(workflow, /^  pypi:$/m);
-  assert.match(workflow, /^    needs: publish$/m);
+  assert.match(workflow, /^    needs: release$/m);
   assert.match(workflow, /^      name: pypi$/m);
   assert.match(workflow, /^      id-token: write$/m);
   assert.match(workflow, /node scripts\/release\/verify-pypi\.mjs/);

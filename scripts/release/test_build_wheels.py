@@ -35,7 +35,7 @@ class BuildWheelsTest(unittest.TestCase):
 
     def seed_artifacts(self) -> dict:
         config = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
-        binaries = [*config["npm_binaries"], *(pack["id"] for pack in config["packs"])]
+        binaries = [*config["wheel_binaries"], *(pack["id"] for pack in config["packs"])]
         for target in config["targets"]:
             extension = ".exe" if target["goos"] == "windows" else ""
             for binary in binaries:
@@ -72,6 +72,16 @@ class BuildWheelsTest(unittest.TestCase):
         output = self.root / "wheels"
 
         with self.assertRaisesRegex(ValueError, "missing wheel artifact"):
+            self.build(output)
+
+        self.assertFalse(output.exists())
+
+    def test_rejects_missing_license_without_writing_output(self) -> None:
+        self.seed_artifacts()
+        self.license_file.unlink()
+        output = self.root / "wheels"
+
+        with self.assertRaisesRegex(ValueError, "wheel license file is missing"):
             self.build(output)
 
         self.assertFalse(output.exists())

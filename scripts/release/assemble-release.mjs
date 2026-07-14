@@ -10,8 +10,6 @@ const values = Object.fromEntries(process.argv.slice(2).map((argument) => {
 }));
 await assembleRelease({
   artifactsDir: values.artifacts,
-  licenseFile: values.license,
-  metaTemplateDir: values.meta,
   outDir: values.out,
   repository: values.repository,
   tag: values.tag,

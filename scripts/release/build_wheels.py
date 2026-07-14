@@ -28,11 +28,11 @@ def _load_config(path: Path) -> dict:
         raise ValueError(f"read release configuration: {error}") from error
     if not isinstance(value, dict):
         raise ValueError("release configuration must be a JSON object")
-    for key in ("npm_binaries", "packs", "targets"):
+    for key in ("wheel_binaries", "packs", "targets"):
         if not isinstance(value.get(key), list) or not value[key]:
             raise ValueError(f"release configuration {key} must be a non-empty array")
-    if not all(isinstance(binary, str) and binary for binary in value["npm_binaries"]):
-        raise ValueError("release configuration contains an invalid npm binary")
+    if not all(isinstance(binary, str) and binary for binary in value["wheel_binaries"]):
+        raise ValueError("release configuration contains an invalid wheel binary")
     for pack in value["packs"]:
         if not isinstance(pack, dict) or not isinstance(pack.get("id"), str) or not pack["id"]:
             raise ValueError("release configuration contains an invalid pack")
@@ -43,7 +43,7 @@ def _load_config(path: Path) -> dict:
         if not WHEEL_TAG.fullmatch(target["wheelTag"]):
             raise ValueError(f"release target {target['id']} has an invalid wheel tag")
     for values, label in (
-        (value["npm_binaries"], "npm binary"),
+        (value["wheel_binaries"], "wheel binary"),
         ([pack["id"] for pack in value["packs"]], "pack ID"),
         ([target["id"] for target in value["targets"]], "target ID"),
         ([target["wheelTag"] for target in value["targets"]], "wheel tag"),
@@ -74,7 +74,7 @@ def _validate_inputs(
         raise ValueError("wheel license file is missing")
     if not (template_dir / "launcher.py").is_file():
         raise ValueError("wheel launcher template is missing")
-    binaries = [*config["npm_binaries"], *(pack["id"] for pack in config["packs"])]
+    binaries = [*config["wheel_binaries"], *(pack["id"] for pack in config["packs"])]
     for target in config["targets"]:
         for binary in binaries:
             artifact = artifacts_dir / _artifact_name(binary, target)
@@ -148,7 +148,7 @@ def _build_wheel(
     }
     executable_paths: set[str] = set()
     extension = ".exe" if target["goos"] == "windows" else ""
-    for binary in config["npm_binaries"]:
+    for binary in config["wheel_binaries"]:
         name = f"thread_keep/bin/{binary}{extension}"
         files[name] = (artifacts_dir / _artifact_name(binary, target)).read_bytes()
         executable_paths.add(name)

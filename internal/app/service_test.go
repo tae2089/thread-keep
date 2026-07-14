@@ -1984,6 +1984,8 @@ func TestFetchRemoteAllowsPendingContextAndPullRejectsSourceMismatch(t *testing.
 	staleRepo := filepath.Join(t.TempDir(), "stale")
 	git(t, primaryRepo, "clone", "--no-local", primaryRepo, fetchRepo)
 	git(t, primaryRepo, "clone", "--no-local", primaryRepo, staleRepo)
+	git(t, staleRepo, "config", "user.name", "Thread Keep Test")
+	git(t, staleRepo, "config", "user.email", "thread-keep@example.test")
 	remotePath := t.TempDir()
 
 	primary, err := Open(ctx, primaryRepo)
@@ -3007,7 +3009,8 @@ func writeFile(t *testing.T, path, body string) {
 
 func git(t *testing.T, repo string, args ...string) {
 	t.Helper()
-	command := exec.Command("git", append([]string{"-C", repo}, args...)...)
+	command := exec.Command("git", append([]string{"-c", "user.useConfigOnly=true", "-C", repo}, args...)...)
+	command.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null")
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)

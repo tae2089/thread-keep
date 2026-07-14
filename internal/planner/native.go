@@ -17,6 +17,11 @@ import (
 	"github.com/zeebo/blake3"
 )
 
+const (
+	gitIdentityName  = "Thread Keep Runner"
+	gitIdentityEmail = "thread-keep@example.invalid"
+)
+
 type coordinatorIndexer struct {
 	coordinator indexing.Coordinator
 }
@@ -209,7 +214,15 @@ func gitOutput(ctx context.Context, root, credential string, arguments ...string
 func gitCommand(ctx context.Context, root, credential string, arguments ...string) *exec.Cmd {
 	secured := []string{"-c", "core.hooksPath=/dev/null", "-c", "credential.helper=", "-c", "http.followRedirects=false", "-C", root}
 	command := exec.CommandContext(ctx, "git", append(secured, arguments...)...)
-	command.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0")
+	command.Env = append(os.Environ(),
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_CONFIG_GLOBAL=/dev/null",
+		"GIT_TERMINAL_PROMPT=0",
+		"GIT_AUTHOR_NAME="+gitIdentityName,
+		"GIT_AUTHOR_EMAIL="+gitIdentityEmail,
+		"GIT_COMMITTER_NAME="+gitIdentityName,
+		"GIT_COMMITTER_EMAIL="+gitIdentityEmail,
+	)
 	if credential != "" {
 		command.Env = append(command.Env, "THREAD_KEEP_CHECKOUT_TOKEN="+credential, "GIT_ASKPASS="+askPassPath(root))
 	}

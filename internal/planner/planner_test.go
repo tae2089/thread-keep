@@ -56,6 +56,10 @@ func TestNativeRunnerBuildsDeterministicPreviewEvidence(t *testing.T) {
 	testGit(t, repository, "add", "extra.go")
 	testGit(t, repository, "commit", "-qm", "feature")
 	headSHA := testGit(t, repository, "rev-parse", "HEAD")
+	t.Setenv("GIT_AUTHOR_NAME", "")
+	t.Setenv("GIT_AUTHOR_EMAIL", "")
+	t.Setenv("GIT_COMMITTER_NAME", "")
+	t.Setenv("GIT_COMMITTER_EMAIL", "")
 	executor := NewNativeRunner(NativeConfig{})
 	request := SourceRequest{Mode: SourcePreview, RepositoryID: "repo-id", TargetRef: "refs/contexts/main", RepositoryURL: repository, BaseSHA: baseSHA, HeadSHA: headSHA}
 	first, err := executor.IndexSource(context.Background(), request)

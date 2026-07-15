@@ -70,7 +70,11 @@ func (s *Store) AssembleContext(ctx context.Context, key domain.WorkingSetKey, q
 			diagnostics = append(diagnostics, domain.RetrievalDiagnostic{Code: "base_coverage_unknown", Detail: "legacy base snapshot does not record complete indexer provenance"})
 		}
 	} else {
-		roots, reasons, err = assemblyRoots(ctx, conn, key, normalized, entities, notes)
+		rootEntities, entityErr := s.entitiesForAssemblyRoots(key, normalized, entities, notes, parentID)
+		if entityErr != nil {
+			return domain.ContextBundle{}, entityErr
+		}
+		roots, reasons, err = assemblyRoots(ctx, conn, key, normalized, rootEntities, notes)
 		if err != nil {
 			return domain.ContextBundle{}, err
 		}
@@ -135,6 +139,39 @@ func currentNotes(ctx context.Context, store *Store, conn *sql.Conn, key domain.
 	return effectiveNotes(committed, pending), parentID, nil
 }
 
+func (s *Store) entitiesForAssemblyRoots(key domain.WorkingSetKey, query domain.ContextQuery, current []domain.Entity, notes []domain.Note, parentID string) ([]domain.Entity, error) {
+	if query.Anchor.Kind != domain.AnchorText || parentID == "" {
+		return current, nil
+	}
+	currentByKey := make(map[string]bool, len(current))
+	for _, entity := range current {
+		currentByKey[entity.Key] = true
+	}
+	missing := make(map[string]bool)
+	for _, note := range notes {
+		if note.BindingState != domain.NoteBindingNeedsReview || !requestedNoteState(query.States, note.BindingState) || currentByKey[note.EntityKey] {
+			continue
+		}
+		missing[note.EntityKey] = true
+	}
+	if len(missing) == 0 {
+		return current, nil
+	}
+	parent, err := s.ReadContextObject(parentID, key.RepositoryID, key.RefName)
+	if err != nil {
+		return nil, err
+	}
+	entities := append([]domain.Entity(nil), current...)
+	for _, entity := range parent.Entities {
+		if !missing[entity.Key] {
+			continue
+		}
+		entities = append(entities, entity)
+		delete(missing, entity.Key)
+	}
+	return entities, nil
+}
+
 func assemblyRoots(ctx context.Context, conn *sql.Conn, key domain.WorkingSetKey, query domain.ContextQuery, entities []domain.Entity, notes []domain.Note) ([]domain.Entity, map[string][]domain.SelectionReason, error) {
 	if query.Anchor.Kind == domain.AnchorEntity {
 		root, err := entityByKeyFresh(ctx, conn, key.WorktreeID, key.SourceSHA, query.Anchor.EntityKey)
@@ -159,15 +196,28 @@ func assemblyRoots(ctx context.Context, conn *sql.Conn, key domain.WorkingSetKey
 			return nil, nil, err
 		}
 	}
-	active := make(map[string][]domain.Note)
+	selected := make(map[string][]domain.Note)
 	for _, note := range notes {
-		if note.BindingState == domain.NoteBindingActive {
-			active[note.EntityKey] = append(active[note.EntityKey], note)
+		if requestedNoteState(query.States, note.BindingState) {
+			selected[note.EntityKey] = append(selected[note.EntityKey], note)
 		}
 	}
 	byKey := make(map[string]domain.Entity, len(entities))
 	for _, entity := range entities {
 		byKey[entity.Key] = entity
+	}
+	terms := strings.Fields(query.Anchor.Query)
+	for entityKey, selectedNotes := range selected {
+		entity, found := byKey[entityKey]
+		if !found {
+			continue
+		}
+		for _, note := range selectedNotes {
+			if noteBodyMatchesTerms(note.Body, terms) {
+				candidates[entityKey] = searchCandidate{EntityKey: entity.Key, Name: entity.Name, Signature: entity.Signature, Path: entity.Path, Pending: note.Pending}
+				break
+			}
+		}
 	}
 	rootsByKey := make(map[string]domain.Entity, len(candidates))
 	reasons := make(map[string][]domain.SelectionReason, len(candidates))
@@ -176,7 +226,10 @@ func assemblyRoots(ctx context.Context, conn *sql.Conn, key domain.WorkingSetKey
 		if !exists {
 			continue
 		}
-		hit := evidenceSearchHit(candidate, strings.Fields(query.Anchor.Query), active[entity.Key])
+		hit := evidenceSearchHit(candidate, terms, selected[entity.Key])
+		if len(hit.MatchedFields) == 0 {
+			continue
+		}
 		rootsByKey[entity.Key] = entity
 		for _, field := range hit.MatchedFields {
 			kind := domain.ReasonTextEntityField
@@ -187,7 +240,7 @@ func assemblyRoots(ctx context.Context, conn *sql.Conn, key domain.WorkingSetKey
 		}
 	}
 	for _, note := range notes {
-		if note.BindingState != domain.NoteBindingActive || !noteHasTopics(note, query.Topics) {
+		if !requestedNoteState(query.States, note.BindingState) || !noteHasTopics(note, query.Topics) {
 			continue
 		}
 		entity, found := byKey[note.EntityKey]
@@ -203,6 +256,27 @@ func assemblyRoots(ctx context.Context, conn *sql.Conn, key domain.WorkingSetKey
 	}
 	sort.Slice(roots, func(left, right int) bool { return roots[left].Key < roots[right].Key })
 	return roots, reasons, nil
+}
+
+func requestedNoteState(states []domain.NoteBindingState, candidate domain.NoteBindingState) bool {
+	for _, state := range states {
+		if state == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func noteBodyMatchesTerms(body string, terms []string) bool {
+	if len(terms) == 0 {
+		return false
+	}
+	for _, term := range terms {
+		if !containsSearchTerm(body, term) {
+			return false
+		}
+	}
+	return true
 }
 
 func noteHasTopics(note domain.Note, topics []string) bool {

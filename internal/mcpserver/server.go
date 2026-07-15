@@ -12,7 +12,7 @@ import (
 	"github.com/tae2089/thread-keep/internal/domain"
 )
 
-const serverVersion = "0.1.0"
+var serverVersion = "dev"
 
 type toolSpec struct {
 	name        string

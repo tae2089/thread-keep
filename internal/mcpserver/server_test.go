@@ -92,6 +92,14 @@ func (c *testClient) callTool(t *testing.T, name string, arguments string) (stri
 	return content.Text, result.IsError
 }
 
+func TestServerAdvertisesDevelopmentVersionByDefault(t *testing.T) {
+	client := startTestServer(t, "")
+	result := client.session.InitializeResult()
+	if result == nil || result.ServerInfo == nil || result.ServerInfo.Version != "dev" {
+		t.Fatalf("InitializeResult().ServerInfo = %+v, want development version", result)
+	}
+}
+
 func TestListsAllToolsWithStableSchemas(t *testing.T) {
 	client := startTestServer(t, newTestRepo(t, true))
 	result, err := client.session.ListTools(context.Background(), nil)

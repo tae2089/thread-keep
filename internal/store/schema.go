@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"sort"
 	"strings"
 	"time"
 
@@ -416,44 +415,6 @@ func listPendingNotes(ctx context.Context, queryer interface {
 	}
 	defer rows.Close()
 	return scanNotes(rows, true)
-}
-
-func pendingNoteIDs(ctx context.Context, queryer interface {
-	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
-}, worktreeID string) ([]string, error) {
-	rows, err := queryer.QueryContext(ctx, "SELECT note_id FROM pending_notes WHERE worktree_id = ? ORDER BY note_id", worktreeID)
-	if err != nil {
-		return nil, localError("read pending note IDs", err)
-	}
-	defer rows.Close()
-	var identifiers []string
-	for rows.Next() {
-		var identifier string
-		if err := rows.Scan(&identifier); err != nil {
-			return nil, localError("scan pending note ID", err)
-		}
-		identifiers = append(identifiers, identifier)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, localError("iterate pending note IDs", err)
-	}
-	return identifiers, nil
-}
-
-func sameIDs(left, right []string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	left = append([]string(nil), left...)
-	right = append([]string(nil), right...)
-	sort.Strings(left)
-	sort.Strings(right)
-	for index := range left {
-		if left[index] != right[index] {
-			return false
-		}
-	}
-	return true
 }
 
 func listCommittedNotes(ctx context.Context, queryer interface {

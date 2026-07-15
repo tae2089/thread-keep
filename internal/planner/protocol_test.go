@@ -76,3 +76,25 @@ func TestWorkerResponseJSONContractRemainsStable(t *testing.T) {
 		t.Fatalf("worker response code = %q, error = %v", code, err)
 	}
 }
+
+func TestValidateSourceEvidenceRejectsMismatchedWorkerVersion(t *testing.T) {
+	sourceSHA := strings.Repeat("a", 40)
+	request := SourceRequest{Mode: SourceFinal, RepositoryID: "repository-id", TargetRef: "refs/contexts/main", FinalSHA: sourceSHA}
+	entity := domain.Entity{Language: "go", Key: "example.Run", Kind: domain.EntityFunction, Name: "Run", Path: "example.go", SourceSHA: sourceSHA, StructuralHash: "hash"}
+	evidence := SourceEvidence{
+		RepositoryID:      request.RepositoryID,
+		TargetRef:         request.TargetRef,
+		Mode:              request.Mode,
+		SourceSHA:         sourceSHA,
+		GitTreeDigest:     "tree-digest",
+		EntityShapeDigest: domain.DigestSourceEvidence([]domain.Entity{entity}),
+		Entities:          []domain.Entity{entity},
+		Provenance:        []domain.ContextSnapshotProvenance{{Language: "go", IndexerID: "builtin/go", IndexerVersion: "1", SourceSHA: sourceSHA}},
+		CoverageComplete:  true,
+		WorkerVersion:     WorkerVersion + "-mismatch",
+	}
+
+	if err := ValidateSourceEvidence(request, evidence); domain.CodeOf(err) != domain.CodeCoverageIncomplete {
+		t.Fatalf("ValidateSourceEvidence() error = %v, want coverage incomplete", err)
+	}
+}

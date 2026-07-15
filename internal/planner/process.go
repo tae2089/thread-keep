@@ -126,7 +126,7 @@ func decodeSingleJSON(contents []byte, target any) error {
 }
 
 func validateSourceEvidence(request SourceRequest, evidence SourceEvidence) error {
-	if evidence.RepositoryID != request.RepositoryID || evidence.TargetRef != request.TargetRef || evidence.Mode != request.Mode || evidence.WorkerVersion == "" || evidence.GitTreeDigest == "" || evidence.EntityShapeDigest != domain.DigestSourceEvidence(evidence.Entities) || !evidence.CoverageComplete || len(evidence.Entities) > maxEvidenceEntities {
+	if evidence.RepositoryID != request.RepositoryID || evidence.TargetRef != request.TargetRef || evidence.Mode != request.Mode || evidence.WorkerVersion != WorkerVersion || evidence.GitTreeDigest == "" || evidence.EntityShapeDigest != domain.DigestSourceEvidence(evidence.Entities) || !evidence.CoverageComplete || len(evidence.Entities) > maxEvidenceEntities {
 		return domain.NewError(domain.CodeCoverageIncomplete, errors.New("runner evidence is incomplete or mismatched"))
 	}
 	if len(evidence.Provenance) == 0 {

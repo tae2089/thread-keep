@@ -91,11 +91,11 @@ func (s *Store) FinalizeCommit(ctx context.Context, input FinalizeInput) error {
 		if pendingCount == 0 {
 			return domain.NewError(domain.CodeNothingToCommit, errors.New("no pending context changes"))
 		}
-		currentPendingIDs, err := pendingNoteIDs(ctx, conn, input.Key.WorktreeID)
+		currentPending, err := listPendingNotes(ctx, conn, input.Key.WorktreeID)
 		if err != nil {
 			return err
 		}
-		if !sameIDs(currentPendingIDs, input.PendingNoteIDs) {
+		if !samePendingSnapshot(currentPending, input.PendingNoteIDs, input.Notes) {
 			return domain.NewError(domain.CodeConcurrentUpdate, errors.New("pending context changes changed while committing"))
 		}
 		currentParent, version, err := s.ref(ctx, conn, input.Key.RefName)
@@ -158,6 +158,51 @@ func (s *Store) FinalizeCommit(ctx context.Context, input FinalizeInput) error {
 		return nil
 	}
 	return err
+}
+
+func samePendingSnapshot(current []domain.Note, expectedIDs []string, snapshot []domain.Note) bool {
+	if len(current) != len(expectedIDs) {
+		return false
+	}
+	expectedIDSet := make(map[string]bool, len(expectedIDs))
+	for _, identifier := range expectedIDs {
+		if identifier == "" || expectedIDSet[identifier] {
+			return false
+		}
+		expectedIDSet[identifier] = true
+	}
+	expectedByID := make(map[string]domain.Note, len(expectedIDs))
+	for _, note := range snapshot {
+		if !expectedIDSet[note.ID] {
+			continue
+		}
+		if _, duplicate := expectedByID[note.ID]; duplicate {
+			return false
+		}
+		expectedByID[note.ID] = note
+	}
+	if len(expectedByID) != len(expectedIDs) {
+		return false
+	}
+	for _, actual := range current {
+		expected, found := expectedByID[actual.ID]
+		if !found || !samePendingNote(actual, expected) {
+			return false
+		}
+	}
+	return true
+}
+
+func samePendingNote(actual, expected domain.Note) bool {
+	if actual.ID != expected.ID || actual.RevisionID != expected.RevisionID || actual.SupersedesRevisionID != expected.SupersedesRevisionID || actual.EntityKey != expected.EntityKey || actual.Kind != expected.Kind || actual.Body != expected.Body || actual.Author != expected.Author || actual.Origin != expected.Origin || !actual.CreatedAt.Equal(expected.CreatedAt) || actual.BindingState != expected.BindingState || actual.BindingSourceSHA != expected.BindingSourceSHA || actual.ReviewReason != expected.ReviewReason || len(actual.Topics) != len(expected.Topics) {
+		return false
+	}
+	for index := range actual.Topics {
+		if actual.Topics[index] != expected.Topics[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Store) FinalizeMerge(ctx context.Context, input FinalizeMergeInput) error {

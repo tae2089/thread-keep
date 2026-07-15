@@ -410,6 +410,9 @@ func (s *Store) Context(ctx context.Context, key domain.WorkingSetKey, entityKey
 		return domain.Entity{}, nil, localError("open SQLite connection", err)
 	}
 	defer conn.Close()
+	if err := s.requireWorkingSet(ctx, conn, key); err != nil {
+		return domain.Entity{}, nil, err
+	}
 	entity, err := entityByKeyFresh(ctx, conn, key.WorktreeID, key.SourceSHA, entityKey)
 	if err != nil {
 		return domain.Entity{}, nil, err

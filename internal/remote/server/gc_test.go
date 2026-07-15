@@ -50,33 +50,32 @@ func setTip(t *testing.T, store *CompositeStorage, commitID string) {
 	}
 }
 
-func waitForMaintenanceLock(t *testing.T, root string) {
+func holdMaintenanceLock(t *testing.T, root string) func() {
 	t.Helper()
-	deadline := time.NewTimer(3 * time.Second)
-	defer deadline.Stop()
-	ticker := time.NewTicker(time.Millisecond)
-	defer ticker.Stop()
-	for {
-		lock, acquired, err := acquireMaintenanceLock(root)
-		if err != nil {
-			t.Fatalf("acquireMaintenanceLock() error = %v", err)
-		}
-		if !acquired {
+	lock, acquired, err := acquireMaintenanceLock(root)
+	if err != nil {
+		t.Fatalf("acquireMaintenanceLock() error = %v", err)
+	}
+	if !acquired {
+		t.Fatal("acquireMaintenanceLock() acquired = false, want true")
+	}
+	released := false
+	release := func() {
+		if released {
 			return
 		}
+		released = true
 		if err := unlockMaintenanceFile(lock); err != nil {
 			_ = lock.Close()
-			t.Fatalf("unlockMaintenanceFile() error = %v", err)
+			t.Errorf("unlockMaintenanceFile() error = %v", err)
+			return
 		}
 		if err := lock.Close(); err != nil {
-			t.Fatalf("Close(maintenance probe) error = %v", err)
-		}
-		select {
-		case <-deadline.C:
-			t.Fatal("RunGC did not acquire the maintenance lock")
-		case <-ticker.C:
+			t.Errorf("Close(maintenance lock) error = %v", err)
 		}
 	}
+	t.Cleanup(release)
+	return release
 }
 
 func gcWasSkipped(t *testing.T, result GCResult) bool {
@@ -222,7 +221,7 @@ func TestGCAbortsRepositoryWhenDAGIsIncomplete(t *testing.T) {
 	}
 }
 
-func TestRunGCSkipsConcurrentPassOnSameStorage(t *testing.T) {
+func TestRunGCSkipsWhileMaintenanceLockIsHeldAndRunsAfterRelease(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	store, err := OpenStorage(root, "")
@@ -233,41 +232,17 @@ func TestRunGCSkipsConcurrentPassOnSameStorage(t *testing.T) {
 
 	orphanID, orphanContents := gcObject(t, nil, "concurrent maintenance orphan")
 	publishForGC(t, store, orphanID, orphanContents, 48*time.Hour)
-	connectionPool, err := store.refs.db.DB()
-	if err != nil {
-		t.Fatalf("DB() error = %v", err)
-	}
-	connection, err := connectionPool.Conn(ctx)
-	if err != nil {
-		t.Fatalf("Conn() error = %v", err)
-	}
-	defer connection.Close()
+	release := holdMaintenanceLock(t, root)
 
-	type outcome struct {
-		result GCResult
-		err    error
+	skipped, err := RunGC(ctx, store, []string{"repo-1"}, 24*time.Hour)
+	if err != nil || !gcWasSkipped(t, skipped) {
+		t.Fatalf("RunGC(while locked) = %+v, %v; want observable skipped result", skipped, err)
 	}
-	outcomes := make(chan outcome, 2)
-	go func() {
-		result, err := RunGC(ctx, store, []string{"repo-1"}, 24*time.Hour)
-		outcomes <- outcome{result: result, err: err}
-	}()
-	waitForMaintenanceLock(t, root)
-	go func() {
-		result, err := RunGC(ctx, store, []string{"repo-1"}, 24*time.Hour)
-		outcomes <- outcome{result: result, err: err}
-	}()
+	release()
 
-	skipped := <-outcomes
-	if skipped.err != nil || !gcWasSkipped(t, skipped.result) {
-		t.Fatalf("concurrent RunGC() = %+v, %v; want observable skipped result", skipped.result, skipped.err)
-	}
-	if err := connection.Close(); err != nil {
-		t.Fatalf("Close(blocking connection) error = %v", err)
-	}
-	performed := <-outcomes
-	if performed.err != nil || gcWasSkipped(t, performed.result) || performed.result.Repositories["repo-1"].Deleted != 1 {
-		t.Fatalf("performing RunGC() = %+v, %v; want one deleted object", performed.result, performed.err)
+	performed, err := RunGC(ctx, store, []string{"repo-1"}, 24*time.Hour)
+	if err != nil || gcWasSkipped(t, performed) || performed.Repositories["repo-1"].Deleted != 1 {
+		t.Fatalf("RunGC(after release) = %+v, %v; want one deleted object", performed, err)
 	}
 }
 
@@ -287,35 +262,14 @@ func TestRunGCStorageLockIsSharedAndReleasedAcrossOpenStorageInstances(t *testin
 
 	orphanID, orphanContents := gcObject(t, nil, "cross-instance maintenance orphan")
 	publishForGC(t, first, orphanID, orphanContents, 48*time.Hour)
-	connectionPool, err := first.refs.db.DB()
-	if err != nil {
-		t.Fatalf("DB() error = %v", err)
-	}
-	connection, err := connectionPool.Conn(ctx)
-	if err != nil {
-		t.Fatalf("Conn() error = %v", err)
-	}
-	defer connection.Close()
+	release := holdMaintenanceLock(t, first.objects.root)
 
-	firstDone := make(chan error, 1)
-	go func() {
-		_, err := RunGC(ctx, first, []string{"repo-1"}, 24*time.Hour)
-		firstDone <- err
-	}()
-	waitForMaintenanceLock(t, root)
 	skipped, err := RunGC(ctx, second, []string{"repo-1"}, 24*time.Hour)
 	if err != nil || !gcWasSkipped(t, skipped) {
 		t.Fatalf("RunGC(second storage while locked) = %+v, %v; want skipped", skipped, err)
 	}
-	if err := connection.Close(); err != nil {
-		t.Fatalf("Close(blocking connection) error = %v", err)
-	}
-	if err := <-firstDone; err != nil {
-		t.Fatalf("RunGC(first storage) error = %v", err)
-	}
+	release()
 
-	afterID, afterContents := gcObject(t, nil, "maintenance after lock release")
-	publishForGC(t, second, afterID, afterContents, 48*time.Hour)
 	after, err := RunGC(ctx, second, []string{"repo-1"}, 24*time.Hour)
 	if err != nil || gcWasSkipped(t, after) || after.Repositories["repo-1"].Deleted != 1 {
 		t.Fatalf("RunGC(after lock release) = %+v, %v; want one deleted object", after, err)

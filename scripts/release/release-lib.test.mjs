@@ -129,10 +129,13 @@ test("every native release target declares one platform wheel tag without npm me
     [
       "manylinux_2_39_x86_64",
       "manylinux_2_39_aarch64",
-      "macosx_15_0_x86_64",
       "macosx_15_0_arm64",
       "win_amd64",
     ],
+  );
+  assert.equal(
+    TARGETS.some((target) => target.goos === "darwin" && target.goarch === "amd64"),
+    false,
   );
   for (const target of TARGETS) {
     assert.equal("npmOS" in target, false);

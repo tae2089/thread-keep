@@ -8,11 +8,10 @@ Thread Keep uses GitHub Actions for CI and tag-driven releases. GoReleaser OSS b
 | --- | --- | --- |
 | `linux/amd64` | `manylinux_2_39_x86_64` | `ubuntu-24.04` |
 | `linux/arm64` | `manylinux_2_39_aarch64` | `ubuntu-24.04-arm` |
-| `darwin/amd64` | `macosx_15_0_x86_64` | `macos-15-intel` |
 | `darwin/arm64` | `macosx_15_0_arm64` | `macos-15` |
 | `windows/amd64` | `win_amd64` | `windows-2025` |
 
-Windows arm64 and Linux musl are not release targets yet. macOS binaries are not code-signed or notarized in this workflow.
+Windows arm64, Linux musl, and macOS Intel are not release targets. macOS Apple Silicon binaries are not code-signed or notarized in this workflow.
 
 GoReleaser also publishes three GHCR images as linux/amd64 and linux/arm64 manifests:
 
@@ -57,8 +56,8 @@ The workflow performs these gates in order:
 
 1. Validate the tag, official repository identity, source/tests, Docker E2E, GoReleaser config, and `LICENSE`.
 2. Build five runtime binaries and six pack binaries on each native target with `CGO_ENABLED=1`.
-3. Require all 55 target-qualified binaries before assembling release output.
-4. Generate SHA-256 checksums and 35 deterministic platform wheels from the staged GoReleaser artifacts: five core wheels and five wheels for each of six pack distributions.
+3. Require all 44 target-qualified binaries before assembling release output.
+4. Generate SHA-256 checksums and 28 deterministic platform wheels from the staged GoReleaser artifacts: four core wheels and four wheels for each of six pack distributions.
 5. Validate every wheel archive, including its platform tag, isolated core or single-pack contents, executable modes, extras metadata, entry points, and `RECORD` hashes.
 6. Publish or byte-for-byte verify the unsigned raw GitHub Release artifacts.
 7. Verify any existing PyPI wheel filename and SHA-256, publish all six pack projects, then publish the core project only after every pack job succeeds.
@@ -81,7 +80,7 @@ checksums.txt
 
 GitHub Release binaries are unsigned raw artifacts. `checksums.txt` records every artifact's SHA-256 for deterministic recovery and corruption detection, but it is published beside the artifacts and is not an independent publisher signature. The raw binaries are retained for manual and operational use; PyPI remains the supported installation and version-management channel for the complete local CLI.
 
-Each of the seven PyPI projects publishes five files for the same release version. Core examples:
+Each of the seven PyPI projects publishes four files for the same release version. Core examples:
 
 ```text
 thread_keep-1.2.3-py3-none-manylinux_2_39_x86_64.whl

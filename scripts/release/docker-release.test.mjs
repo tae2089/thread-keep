@@ -92,7 +92,7 @@ test("tag workflow publishes six pack projects before the PyPI core project", as
   const workflow = await readFile(".github/workflows/release.yml", "utf8");
   assert.match(workflow, /python3 scripts\/release\/build_wheels\.py/);
   assert.match(workflow, /name: pypi-wheels/);
-  assert.match(workflow, /find release\/wheels -mindepth 2 -maxdepth 2 -name '\*\.whl'.*"35"/);
+  assert.match(workflow, /find release\/wheels -mindepth 2 -maxdepth 2 -name '\*\.whl'.*"28"/);
   assert.match(workflow, /^  pypi-packs:$/m);
   assert.match(workflow, /^    needs: release$/m);
   for (const language of ["typescript", "javascript", "python", "java", "kotlin", "rust"]) {
@@ -109,6 +109,13 @@ test("tag workflow publishes six pack projects before the PyPI core project", as
   assert.match(workflow, /uses: pypa\/gh-action-pypi-publish@release\/v1/);
   assert.match(workflow, /^          packages-dir: release\/wheels\/thread-keep\/$/m);
   assert.match(workflow, /^          skip-existing: true$/m);
+});
+
+test("tag workflow excludes the macOS Intel native target", async () => {
+  const workflow = await readFile(".github/workflows/release.yml", "utf8");
+  assert.doesNotMatch(workflow, /macos-15-intel|target: darwin-x64/);
+  assert.match(workflow, /runner: macos-15\n\s+target: darwin-arm64/);
+  assert.match(workflow, /find "\$distribution" -maxdepth 1 -name '\*\.whl'.*"4"/);
 });
 
 test("pull request CI validates the container GoReleaser config", async () => {

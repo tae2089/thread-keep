@@ -32,12 +32,6 @@
       "wheelTag": "manylinux_2_39_aarch64"
     },
     {
-      "id": "darwin-x64",
-      "goos": "darwin",
-      "goarch": "amd64",
-      "wheelTag": "macosx_15_0_x86_64"
-    },
-    {
       "id": "darwin-arm64",
       "goos": "darwin",
       "goarch": "arm64",

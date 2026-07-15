@@ -75,10 +75,6 @@ jobs:
             target: linux-arm64
             goos: linux
             goarch: arm64
-          - runner: macos-15-intel
-            target: darwin-x64
-            goos: darwin
-            goarch: amd64
           - runner: macos-15
             target: darwin-arm64
             goos: darwin
@@ -196,9 +192,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(find release/wheels -mindepth 2 -maxdepth 2 -name '*.whl' -type f | wc -l | tr -d ' ')" = "35"
+          test "$(find release/wheels -mindepth 2 -maxdepth 2 -name '*.whl' -type f | wc -l | tr -d ' ')" = "28"
           for distribution in release/wheels/*; do
-            test "$(find "$distribution" -maxdepth 1 -name '*.whl' -type f | wc -l | tr -d ' ')" = "5"
+            test "$(find "$distribution" -maxdepth 1 -name '*.whl' -type f | wc -l | tr -d ' ')" = "4"
           done
           for wheel in release/wheels/*/*.whl; do
             python3 -m zipfile -t "$wheel"

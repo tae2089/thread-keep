@@ -1,5 +1,20 @@
 # Running the Thread Keep context remote for a team
 
+This guide is for operators who need a shared HTTP(S) context remote. If a shared
+filesystem path is enough, use the simpler remote flow in the
+[Quickstart](quickstart.md#sharing-with-your-team); you do not need to run a server.
+
+The shortest production reading path is:
+
+1. Read **What the server stores and never stores**.
+2. Complete **Single-node setup** behind external TLS termination.
+3. Use **Team onboarding and handover** for clients.
+4. Add clustering only when one node is no longer sufficient.
+5. Include both the object root and ref database in backup and recovery.
+
+The `thread-keep-server` binary is an operational GitHub Release/container
+artifact; it is not included in the local `thread-keep` PyPI wheel.
+
 `thread-keep-server` is the self-hosted context-remote server. It lets a team
 publish and inherit code context — the intent, decisions, constraints, examples,
 and warnings captured against code entities — independently of the Git host that
@@ -341,7 +356,7 @@ Recovery is forgiving. Every client holds its own local context and can always
 re-push it, so a lost server can be rebuilt from the team's working copies. If a
 **client** loses its local SQLite projection (objects still present), it rebuilds
 with `thread-keep rebuild <context-commit-id>` — see the
-[Projection recovery section of the README](../../README.md#projection-recovery).
+[storage verification and recovery section of the Quickstart](quickstart.md#verify-where-the-context-lives).
 
 ## Divergence
 
@@ -356,5 +371,5 @@ resolves each with `merge resolve` (choosing `local`, `remote`, or an authored
 revision), and finalizes with `merge commit`, which advances only the local ref.
 They then push again. Non-overlapping notes compose automatically; competing
 revisions, bindings, or mappings must be resolved explicitly. See the
-[Semantic snapshot merge section of the README](../../README.md#semantic-snapshot-merge)
+[same-source divergence section of the Quickstart](quickstart.md#resolve-same-source-divergence)
 for the full command sequence.

@@ -1,5 +1,15 @@
 # Release operations
 
+This guide is for maintainers publishing a Thread Keep release. Users looking to
+install Thread Keep should follow the [Quickstart](quickstart.md); operators looking
+for deployment commands should use the [Team server](team-server.md) or
+[PR context planning](pr-context-coordinator.md) guide.
+
+The release workflow publishes three distinct artifact families: PyPI wheels for
+the local CLI/MCP and optional packs, unsigned raw GitHub Release binaries for all
+runtime roles, and three GHCR images for the deployable server/coordinator/runner
+boundaries.
+
 Thread Keep uses GitHub Actions for CI and tag-driven releases. GoReleaser OSS builds every executable on its native target because the SQLite FTS5 dependency requires CGO. The release workflow then publishes raw GitHub assets, platform-specific PyPI wheels, and container images from those target-qualified binaries.
 
 ## Supported targets
@@ -84,6 +94,7 @@ Each of the seven PyPI projects publishes four files for the same release versio
 
 ```text
 thread_keep-1.2.3-py3-none-manylinux_2_39_x86_64.whl
+thread_keep-1.2.3-py3-none-manylinux_2_39_aarch64.whl
 thread_keep-1.2.3-py3-none-macosx_15_0_arm64.whl
 thread_keep-1.2.3-py3-none-win_amd64.whl
 ```

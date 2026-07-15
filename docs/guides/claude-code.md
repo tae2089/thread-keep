@@ -6,8 +6,16 @@ while it works. Everything the agent writes stays a draft; a human always promot
 
 ## 1. Prerequisites
 
-Before connecting an agent, the repository must be indexed and the binaries must be on
-your `PATH`.
+Install the core package, then initialize and index the repository before connecting
+an agent:
+
+```bash
+python3 -m pip install thread-keep
+which thread-keep thread-keep-mcp
+```
+
+Use `where thread-keep` and `where thread-keep-mcp` on Windows. A Thread Keep source
+checkout can use `make build` instead.
 
 ```bash
 # from the repo you want to work in
@@ -17,15 +25,9 @@ thread-keep update
 thread-keep status
 ```
 
-Build and install the binaries you need (`thread-keep`, `thread-keep-mcp`) per the
-project README, and confirm they resolve:
-
-```bash
-which thread-keep thread-keep-mcp
-```
-
 If `update` reports a language as `missing_pack`, install the language pack before you
-rely on cross-language search (see the README pack sections). Go is always indexed.
+rely on cross-language search (see the
+[Quickstart](quickstart.md#install-thread-keep)). Go is always indexed.
 
 ## 2. Register the MCP server
 
@@ -34,11 +36,16 @@ Code:
 
 ```bash
 claude mcp add thread-keep -- thread-keep-mcp
+claude mcp get thread-keep
 ```
 
 Every tool accepts an optional `repo` worktree path. If one repository should be
 the default, append `--repo /path/to/repo`; an explicit tool-call `repo` always
 overrides that default.
+
+Use `claude mcp list` to inspect all configured servers. The current command and
+scope options are documented in the official
+[Claude Code MCP guide](https://docs.anthropic.com/en/docs/claude-code/mcp).
 
 Alternatively, commit a project-scoped `.mcp.json` at the repo root so every collaborator
 gets the same server:
@@ -77,8 +84,8 @@ is required at call time when the server has no `--repo` default.
 
 | Tool | Purpose |
 | --- | --- |
-| `note_add` | Draft one evidence-backed pending note bound to an entity (`entity_key`, `kind`, `body`; optional `author`). |
-| `note_revise` | Draft a pending successor revision for an existing note (`note_id`, `body`; optional `author`). |
+| `note_add` | Draft one evidence-backed pending note bound to an entity (`entity_key`, `kind`, `body`; optional `author` and `topics`). |
+| `note_revise` | Draft a pending successor revision for a committed note (`note_id`, `body`; optional `author` and replacement `topics`). |
 
 `kind` is one of `intent`, `decision`, `constraint`, `example`, `warning`.
 
@@ -204,9 +211,13 @@ Agent drafts are proposals. A human reviews and promotes them:
 
 ```bash
 thread-keep diff                                   # see agent-drafted pending notes
-# edit or discard as needed, then promote:
 thread-keep commit -m "Record payment authz constraint" --author "Jane Dev"
 ```
+
+`commit` promotes the complete pending set. The current CLI does not provide a
+selective pending-draft edit or discard command, and `note revise` only accepts a
+previously committed note. If any draft is unacceptable, do not commit the set;
+this is a current local-workflow limitation rather than an implicit approval path.
 
 When a source update changes a bound entity, its binding goes `needs_review`. Confirm the
 reviewed binding against the current entity key:

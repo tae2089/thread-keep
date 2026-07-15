@@ -1,4 +1,8 @@
-# Multi-language Indexing Design
+# Multi-language Indexing
+
+This document describes the implemented indexing contract and records the design
+decisions behind it. Go is built into the core; TypeScript, JavaScript, Python,
+Java, Kotlin, and Rust are delivered as optional Thread Keep language packs.
 
 ## Decision
 
@@ -6,7 +10,7 @@ Thread Keep borrows the structural-extraction approach of tools such as sem: det
 
 It does not depend on, invoke, or embed sem. Go remains a built-in go/ast indexer. Non-Go support is delivered as Thread Keep-owned, separately installed language packs that may use Tree-sitter internally. No pack is downloaded, upgraded, or installed implicitly.
 
-## Planning-grill decisions
+## Design decisions
 
 | Dimension | Decision |
 | --- | --- |
@@ -27,7 +31,7 @@ An ADR is intentionally skipped. The project uses focused architecture documents
 | Language detector | Core-owned file classifier that maps repository-relative paths to known language IDs. It does not parse source. |
 | Language candidate | A detected language and its sorted file allowlist for one source SHA. |
 | Indexer | A module with one small interface that produces normalized entities for one language candidate. |
-| Built-in indexer | An indexer linked into the core binary. Go is the first and initially only one. |
+| Built-in indexer | An indexer linked into the core binary. Go is currently the only built-in indexer. |
 | Language pack | A Thread Keep-owned executable installed separately from the core. It implements the indexer protocol and may use Tree-sitter internally. |
 | Indexer catalog | Core-owned registry that resolves a candidate to a built-in indexer, installed pack, or no implementation. |
 | Coverage | Observable freshness and availability state of one detected language in one worktree. |
@@ -35,7 +39,9 @@ An ADR is intentionally skipped. The project uses focused architecture documents
 | Canonical entity ID | Thread Keep-owned identity used by notes and context objects. Parser-native IDs are evidence, never canonical storage. |
 | Selector | Human-readable entity reference resolved to one canonical entity ID. |
 
-Use language pack rather than plugin in the first release. The pack set is owned and versioned by Thread Keep; there is no general third-party marketplace or in-process code loading.
+Use language pack rather than plugin. The pack set is owned and versioned by
+Thread Keep; there is no general third-party marketplace or in-process code
+loading.
 
 ## Component design
 
@@ -80,11 +86,14 @@ flowchart LR
 
 Core owns the interface and launches packs over local stdio. Packs never import core packages and do not access SQLite directly.
 
-Current integration points are Service.Update in internal/app/service.go:57-76, the concrete Go extractor in internal/indexer/go.go:20-95, the entity model in internal/domain/domain.go:58-68, and atomic entity replacement in internal/store/store.go:67-82.
+Current integration points are `Service.Update` in `internal/app`, the concrete Go
+extractor in `internal/indexer`, normalized entities in `internal/domain`, the
+coordinator/protocol in `internal/indexing`, and atomic per-language projection
+replacement in `internal/store`.
 
 ## Module boundary
 
-Create internal/indexing. Its small interface is:
+`internal/indexing` owns this small interface:
 
 ~~~go
 type Indexer interface {
@@ -95,20 +104,21 @@ type Indexer interface {
 type Request struct {
     RepositoryRoot string
     SourceSHA      string
-    Language       LanguageID
+    Language       Language
     Files          []string // sorted, repository-relative
 }
 
 type Result struct {
-    Language       LanguageID
-    IndexerID      string
-    IndexerVersion string
-    Entities       []ExtractedEntity
-    Diagnostics    []Diagnostic
+    Indexer     Descriptor
+    Entities    []domain.Entity
+    Diagnostics []string
 }
 ~~~
 
-IndexCoordinator hides detection, selection, subprocess lifecycle, protocol validation, duplicate detection, coverage transitions, and atomic projection replacement. Service receives one UpdateResult; it does not know which parser ran.
+`indexing.Coordinator` hides detection, selection, subprocess lifecycle, protocol
+validation, duplicate detection, and per-language coverage results. The
+application service coordinates those results with atomic projection replacement;
+it does not know which parser implementation ran.
 
 The seam is real because two adapter modes exist:
 
@@ -121,7 +131,7 @@ Do not add interfaces around Store or Git for this work. Existing concrete local
 
 The detector uses a versioned, core-owned extension/name table:
 
-| Language ID | Candidate evidence | Initial resolver |
+| Language ID | Candidate evidence | Current resolver |
 | --- | --- | --- |
 | go | .go | built-in Go adapter |
 | typescript | .ts, .tsx, .mts, .cts | TypeScript pack when installed |
@@ -135,7 +145,7 @@ It skips .git, vendor, and node_modules, matching the current Go indexer. It sor
 
 ~~~text
 thread-keep init
-  -> report detected languages and installed/missing coverage
+  -> create local Thread Keep storage; no pack download or indexing
 
 thread-keep indexers list
   -> read-only report of known builtin/installed/missing indexers and detected languages
@@ -231,13 +241,16 @@ Coverage is complete only if every detected, non-ignored language is indexed at 
 - Commit rejects incomplete coverage with typed coverage_incomplete. It never creates history from a mixed-freshness snapshot.
 - Note add accepts only fresh entities.
 
-Status and JSON output expose coverage_complete plus a coverage array. Default update returns a successful partial result with explicit coverage. Future update --require-complete returns coverage_incomplete after persisting coverage observation.
+Status and JSON output expose `coverage_complete` plus a coverage array. Default
+`update` returns a successful partial result with explicit coverage.
+`update --require-complete` persists the coverage observation and then returns
+`coverage_incomplete` when any detected language is missing or failed.
 
-## Proposed update flow
+## Current update flow
 
 ~~~text
-P1  RECEIVE update(requireComplete)                         [internal/app/service.go:57]
-P2  READ mutable Git state and require a clean worktree     [internal/app/service.go:58-68]
+P1  RECEIVE update(requireComplete)
+P2  READ mutable Git state and require a clean worktree
 P3  DETECT language candidates from the source tree
 P4  READ existing coverage and pending-note state
 P5  IF source changed while pending notes exist
@@ -295,7 +308,7 @@ thread-keep pack install <language>...
 
 Each core platform wheel contains the native CLI and MCP server. Each selected pack platform wheel contains exactly one official pack executable for the same target and version; `thread-keep[all]` selects all six. GitHub Releases publish the target-qualified binaries individually plus `checksums.txt` for manual and operational use. Those raw artifacts are not application-signed, and their adjacent checksums are corruption evidence rather than an independent authenticity proof.
 
-Status JSON gains:
+Status JSON includes:
 
 ~~~json
 {
@@ -307,7 +320,8 @@ Status JSON gains:
 }
 ~~~
 
-UpdateResult gains the same coverage summary. Scripts branch on coverage_incomplete, not an undocumented numeric exit code.
+`UpdateResult` includes the same coverage summary. Scripts branch on
+`coverage_incomplete`, not an undocumented numeric exit code.
 
 ## Test scenarios
 
@@ -321,15 +335,17 @@ UpdateResult gains the same coverage summary. Scripts branch on coverage_incompl
 - [x] Migration safety: v1 Go rows gain language coverage without rewriting note bindings or objects.
 - [x] No implicit install: init/update makes no network request or adapter-executable write.
 
-## Implementation sequence
+## Implementation status
 
-1. Add domain terms, coverage schema, and v1-to-v2 migration tests.
-2. Extract the Go indexer behind internal/indexing.Indexer and preserve behavior through contract tests.
-3. Add detector/catalog, coverage coordinator, and fresh-only search filtering.
-4. Add subprocess pack runner with a fake local pack for protocol, timeout, and failure tests.
-5. Add CLI coverage fields, require-complete, commit gate, and error contracts.
-6. Implement official TypeScript, JavaScript, Python, Java, Kotlin, and Rust Tree-sitter packs and mixed-repository Docker E2E fixtures. [implemented; Docker execution remains quota-deferred]
-7. Publish a lightweight core plus six exact-version optional PyPI pack distributions, and publish unsigned target binaries plus checksums for manual use. [implemented]
+The original implementation sequence is complete:
+
+1. Domain terms, coverage storage, and migration tests are implemented.
+2. The Go indexer implements `internal/indexing.Indexer` with contract coverage.
+3. Detection, pack resolution, coverage coordination, and fresh-only search are implemented.
+4. The subprocess protocol enforces version, file allowlist, timeout, output size, and normalized-entity validation.
+5. CLI coverage output, `--require-complete`, the commit gate, and stable errors are implemented.
+6. Official TypeScript, JavaScript, Python, Java, Kotlin, and Rust Tree-sitter packs are implemented and included in mixed-language Docker E2E coverage.
+7. Release automation builds a lightweight core distribution, six exact-version optional pack distributions, raw binaries, and checksums for each supported target.
 
 No Tree-sitter library enters the Go core. It appears only in separate external-pack dependency graphs.
 
@@ -342,6 +358,12 @@ No Tree-sitter library enters the Go core. It appears only in separate external-
 - Performance: explicit update may start local processes; no daemon or watcher is introduced.
 - Unsupported files: report coverage. Do not invent arbitrary text chunks as code entities.
 
-## Handoff
+## Remaining limits
 
-Planning-grill status: SHARPENED. Terminology, interface, state transitions, failure policy, implementation sequence, and test scenarios are concrete enough to decompose when implementation is requested.
+- Go is the only built-in language; all other supported languages require an
+  installed native pack.
+- There is no third-party pack marketplace or repository-defined executable
+  discovery.
+- Indexers run sequentially; parallel execution remains deferred until resource
+  and cancellation limits are designed.
+- Opaque entity IDs and aliases for key migrations remain deferred.

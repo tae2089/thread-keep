@@ -7,18 +7,21 @@ and branches; Thread Keep versions the intent, decisions, constraints, examples,
 warnings that Git alone can't capture.
 
 This guide gets you from zero to a committed, searchable context note in about
-15 minutes.
+15 minutes. Use the published package path unless you are developing Thread Keep
+itself or need an operational server binary.
 
-## Build and install
+## Install Thread Keep
 
-For a published release, install the lightweight core platform wheel into a Python environment. It contains the CLI and MCP server:
+Install the lightweight core package into a Python 3.9 or newer environment. It
+contains the local CLI and MCP server:
 
 ```bash
 python3 -m pip install thread-keep
 thread-keep --help
 ```
 
-The wheel supports Linux glibc x64/arm64, macOS arm64, and Windows x64. Add only the language packs you need:
+Published wheels support Linux glibc x64/arm64, macOS Apple Silicon, and Windows
+x64. Add only the language packs your repository needs:
 
 ```bash
 python3 -m pip install "thread-keep[typescript,python]"
@@ -28,35 +31,52 @@ thread-keep pack install typescript python
 python3 -m pip install "thread-keep[all]"
 ```
 
-Each extra selects a separate native pack distribution at the exact core version. The `pack install` command is a shallow wrapper around the current Python environment's pip; it does not detect or install languages implicitly.
+Each extra selects a separate native pack distribution at the exact core version.
+The `pack install` command is a shallow wrapper around the current Python
+environment's pip; it does not detect or install languages implicitly. Check the
+result from inside the repository you want to index:
 
-To build from source instead, Thread Keep uses CGO-backed SQLite (FTS5), so you need a Go toolchain and a C compiler. From the repository root:
+```bash
+thread-keep indexers list
+```
+
+Go is built in. Other detected languages report `installed` or `missing` so you
+know which optional pack is needed.
+
+### Build from source
+
+Thread Keep uses CGO-backed SQLite (FTS5), so a source build needs a Go toolchain
+and a C compiler. From the Thread Keep repository root:
 
 ```bash
 make build
 ```
 
-This produces three binaries in `bin/`:
+This produces five runtime binaries in `bin/`:
 
 - `thread-keep` — the CLI you use day to day.
+- `thread-keep-mcp` — the local stdio MCP server used by coding agents (see
+  [claude-code.md](claude-code.md) and [codex.md](codex.md)).
 - `thread-keep-server` — the self-hosted context-remote server (see
   [team-server.md](team-server.md)).
-- `thread-keep-mcp` — the MCP server that exposes context to coding agents (see
-  [claude-code.md](claude-code.md) and [codex.md](codex.md)).
+- `thread-keep-coordinator` — the durable PR context planning process (see
+  [pr-context-coordinator.md](pr-context-coordinator.md)).
+- `thread-keep-runner` — the isolated one-job planning worker used by the
+  coordinator.
 
 Put `bin/thread-keep` on your `PATH`, or call it by path as `./bin/thread-keep`.
 
-Go is indexed out of the box. A source build needs explicit TypeScript/JavaScript, Python, Java, Kotlin, and Rust packs; PyPI extras install them selectively:
+Go is indexed out of the box. A source build needs explicit TypeScript/JavaScript,
+Python, Java, Kotlin, and Rust packs:
 
 ```bash
 make build-pack
 ```
 
-Then place each manually built pack executable at its fixed path under your user config
-directory (for example `$XDG_CONFIG_HOME/thread-keep/packs/...`). Run
-`thread-keep indexers list` to see which packs are built in, available, or missing,
-and which languages your current repo uses. Without a detected language's pack, Go
-stays searchable and that language reports `missing_pack`.
+Then copy each required executable from `bin/` to the `thread-keep/packs/`
+subdirectory of your operating system's user config directory. Run
+`thread-keep indexers list` to verify the resolved paths. Without a detected
+language's pack, Go stays searchable and that language reports `missing_pack`.
 
 Upgrade, pin, or roll back the core and selected pack set through pip:
 
@@ -80,8 +100,10 @@ thread-keep init
 ok
 ```
 
-`init` is required before any other local context command. It stores everything
-under `thread-keep/` inside the Git common directory — your source tree is untouched.
+`init` is required before stateful local context commands such as `update`,
+`status`, and `note add`. Inspection/install commands such as `indexers list` and
+`pack install` do not require initialization. Local context is stored under
+`thread-keep/` inside the Git common directory—your source tree is untouched.
 
 ### 2. Commit your source first, then index
 
@@ -118,6 +140,7 @@ Choose one of five kinds:
 ```bash
 thread-keep note add example.Run \
   --kind intent \
+  --topic workflow-entrypoint \
   --body "Runs the example workflow because callers need a single entrypoint (see PR #12)."
 ```
 
@@ -138,6 +161,9 @@ and trace the note. Compare:
   Stripe adapter both assume integers — see money.go and adapter_test.go." — names
   the rule and the code that depends on it.
 - Bad `constraint`: "Be careful with the amount field." — vague, unactionable.
+
+`--topic` is optional and repeatable. Use it for stable exact filters such as a
+subsystem or invariant; do not turn topics into a second copy of the note body.
 
 ### 4. Review the working state
 
@@ -220,6 +246,40 @@ thread-keep log
 003a35ba4b82df96d57311e1586f53cfff1ed95ebca9f5d24148b04a31458449	Document example workflow
 ```
 
+## Verify where the context lives
+
+The commands above are the normal verification path:
+
+- `status` distinguishes pending work from the current committed snapshot;
+- `diff` shows what has not been committed;
+- `context get` and `search` show active committed context; and
+- `log` shows immutable context history.
+
+To locate the files on disk, ask Git for the common directory used by this
+worktree:
+
+```bash
+git rev-parse --git-common-dir
+```
+
+After `thread-keep init`, that directory contains:
+
+```text
+thread-keep/
+├── index.sqlite                    # rebuildable local projection and pending state
+└── objects/
+    └── <context-snapshot-id>.json  # immutable committed object
+```
+
+Linked worktrees share the immutable object directory but keep pending working
+sets separated by worktree identity. Do not edit SQLite directly. If the local
+projection is lost while committed objects remain, recover it with an explicit ID
+from `thread-keep log`:
+
+```bash
+thread-keep rebuild <context-snapshot-id>
+```
+
 ## Keeping context fresh
 
 Thread Keep never silently treats stale context as current. When your source
@@ -284,6 +344,24 @@ thread-keep remote pull origin
   Divergent or source-mismatched context returns a conflict rather than
   overwriting — resolve it explicitly, never by an automatic merge.
 
+### Resolve same-source divergence
+
+After `remote fetch` reports a competing snapshot for the same source revision,
+use the local and fetched snapshot IDs explicitly:
+
+```bash
+thread-keep context merge start <local-snapshot-id> <remote-snapshot-id> \
+  -m "Merge review context"
+thread-keep context merge show <session-id>
+thread-keep context merge resolve <session-id> <conflict-id> --use local
+# repeat with --use remote or an authored resolution when appropriate
+thread-keep context merge commit <session-id>
+thread-keep remote push origin
+```
+
+The merge advances only the local context ref. It never edits source files or
+publishes automatically; inspect the result before the explicit push.
+
 For HTTP(S) remotes, provide your GitHub token through the
 `THREAD_KEEP_REMOTE_TOKEN` environment variable; it is sent as a bearer header and
 never stored or logged. See [team-server.md](team-server.md) for running the hosted
@@ -299,7 +377,7 @@ Every failure exits with a stable code and a `code: message` line on stderr
 | 2 | `validation` | A bad or missing argument/flag (empty query, unknown note ID). Fix the command. |
 | 3 | `repository_state` | Worktree is dirty or detached when indexing. Commit or stash your source changes first, then `update`. |
 | 4 | `not_initialized` | You ran a context command before `init`. Run `thread-keep init`. |
-| 5 | `stale_working_set` / `working_set_dirty` / `nothing_to_commit` / `coverage_incomplete` | Source moved under pending notes, nothing pending to commit, or a detected language lacks coverage. Re-run `update`; commit or discard context first if the working set is dirty; install the missing language pack for coverage errors. |
+| 5 | `stale_working_set` / `working_set_dirty` / `nothing_to_commit` / `coverage_incomplete` | Source moved under pending notes, nothing is pending, or a detected language lacks coverage. Return the source to the indexed commit or commit an acceptable complete pending set before changing source; install the missing pack for coverage errors. Selective pending-draft discard is not currently available. |
 | 6 | `busy` / `concurrent_update` / `remote_conflict` | A lock is held, a concurrent change raced the commit, or the remote diverged. Retry; for `remote_conflict`, `fetch` and resolve explicitly. |
 | 7 | `entity_not_found` | The entity key isn't indexed. Check the key with `search`, and run `update` if the source changed. |
 | 8 | `auth` | GitHub rejected the token for an HTTP remote. Check `THREAD_KEEP_REMOTE_TOKEN` has pull (read) or push (write) permission on the mapped repo. |
@@ -309,3 +387,7 @@ Every failure exits with a stable code and a `code: message` line on stderr
 - [claude-code.md](claude-code.md) — use Thread Keep from Claude Code over MCP.
 - [codex.md](codex.md) — use Thread Keep from Codex.
 - [team-server.md](team-server.md) — run and authenticate the hosted context remote.
+- [pr-context-coordinator.md](pr-context-coordinator.md) — plan and land context
+  for GitHub pull requests.
+- [../architecture.md](../architecture.md) — read the current implementation
+  contract and explicit product limits.

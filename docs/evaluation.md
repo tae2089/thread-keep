@@ -1,5 +1,9 @@
 # Agent Integration Evaluation Plan
 
+This is a future evaluation specification, not a report of current product
+telemetry or measured agent improvement. The **Status** table below is the source
+of truth for what has and has not been measured.
+
 The deterministic guarantees of Thread Keep — conflict resolution, stale-context
 blocking, replication, authorization — are covered by unit tests and the Docker
 E2E suite. This document defines the **probabilistic** questions that tests
@@ -52,8 +56,8 @@ metrics are collected yet; this plan is the contract for the evaluation harness.
 
 ### 5. Human acceptance of agent drafts
 - Field metric, not a lab metric. Source of truth already exists in the data
-  model: every committed note revision carries `origin`; drafts that humans
-  discard never enter a commit.
+  model: every committed note revision carries `origin`; drafts that remain
+  uncommitted never enter immutable history.
 - Measure: acceptance rate = agent-origin revisions in committed snapshots ÷
   agent-origin pending notes drafted (drafted count requires a small local
   event log or periodic `diff` sampling — the one instrumentation gap).

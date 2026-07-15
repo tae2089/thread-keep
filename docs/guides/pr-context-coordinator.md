@@ -1,5 +1,23 @@
 # PR Context Planning and Landing
 
+This is an advanced, opt-in operator guide. You do not need the coordinator or
+runner for local notes, MCP drafting, or ordinary remote synchronization. Start
+with the [Quickstart](quickstart.md) and [Team server](team-server.md) first.
+
+Current support is deliberately bounded:
+
+| Capability | Status |
+| --- | --- |
+| Durable GitHub webhook intake and queued work | Implemented |
+| Preview planning and informational Checks | Implemented |
+| Opt-in automatic landing plus manual recovery | Implemented |
+| Process, in-process, Docker, and Kubernetes Job runners | Implemented |
+| Multi-coordinator HA | Not implemented; `durable_single` only |
+| Live Kubernetes distribution/storage-class certification | Opt-in per target cluster |
+
+Deploy server, coordinator, and runner from the same release. The coordinator and
+runner are GitHub Release/container artifacts rather than local PyPI-wheel commands.
+
 Thread Keep can run an opt-in GitHub PR coordinator beside the existing immutable
 object/ref remote. GitHub remains the source-merge authority. The coordinator only plans
 context changes, publishes an informational Check, and—when explicitly enabled—lands a
@@ -158,8 +176,8 @@ cluster. The Docker backend additionally has an opt-in real-Engine transport and
 }
 ```
 
-The first release accepts exactly one target branch per remote repository key. Use a
-separate key if a later deployment needs another target branch. `automatic_landing` is
+The current implementation accepts exactly one target branch per remote repository key. Use a
+separate key when a deployment needs another target branch. `automatic_landing` is
 false by default; this enables preview planning without canonical context writes.
 
 Start both long-running processes against the same PostgreSQL database. The object root shown for server and

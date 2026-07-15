@@ -207,11 +207,11 @@ echo "scenario: initialization boundary and local workflow"
 REPO="$WORKDIR/main"
 init_repo "$REPO"
 expect_json_error 4 not_initialized "$THREAD_KEEP" --repo "$REPO" --json update
-[ ! -e "$REPO/.git/thread-keep/index.sqlite" ] || fail "update created storage before init"
+[ ! -e "$REPO/.thread-keep/index.sqlite" ] || fail "update created storage before init"
 
 run "$THREAD_KEEP" --repo "$REPO" --json init
 assert_contains "$LAST_STDOUT" '"initialized":true'
-assert_file "$REPO/.git/thread-keep/index.sqlite"
+assert_file "$REPO/.thread-keep/index.sqlite"
 run "$THREAD_KEEP" --repo "$REPO" --json init
 assert_contains "$LAST_STDOUT" '"initialized":true'
 
@@ -233,7 +233,7 @@ assert_contains "$LAST_STDOUT" '"kind":"intent"'
 
 run "$THREAD_KEEP" --repo "$REPO" --json commit -m "document payment retry" --author e2e
 assert_contains "$LAST_STDOUT" '"message":"document payment retry"'
-[ "$(find "$REPO/.git/thread-keep/objects" -name '*.json' -type f | wc -l | tr -d ' ')" -eq 1 ] || fail "expected one immutable context object"
+[ "$(find "$REPO/.thread-keep/objects" -name '*.json' -type f | wc -l | tr -d ' ')" -eq 1 ] || fail "expected one immutable context object"
 run "$THREAD_KEEP" --repo "$REPO" --json status
 assert_contains "$LAST_STDOUT" '"pending_notes":0'
 run "$THREAD_KEEP" --repo "$REPO" --json log
@@ -264,6 +264,7 @@ run "$THREAD_KEEP" --repo "$ISOLATION_REPO" update
 run "$THREAD_KEEP" --repo "$ISOLATION_REPO" note add sample.Run --kind intent --body "primary note"
 LINKED="$WORKDIR/linked"
 git -C "$ISOLATION_REPO" worktree add -q -b linked "$LINKED"
+run "$THREAD_KEEP" --repo "$LINKED" init
 run "$THREAD_KEEP" --repo "$LINKED" update
 run "$THREAD_KEEP" --repo "$LINKED" --json status
 assert_contains "$LAST_STDOUT" '"pending_notes":0'

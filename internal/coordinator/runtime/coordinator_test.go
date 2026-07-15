@@ -20,6 +20,11 @@ type reconcilingProcessor struct {
 	once       sync.Once
 }
 
+type cancellationProcessor struct {
+	started   chan struct{}
+	cancelled chan error
+}
+
 func TestConfigRejectsHAAndInvalidTimeoutOrdering(t *testing.T) {
 	config := DefaultConfig()
 	config.Mode = ModeHA
@@ -110,6 +115,43 @@ func TestCoordinatorRunsOneBoundedReconcilerLoop(t *testing.T) {
 	}
 }
 
+func TestCoordinatorShutdownCancelsInFlightProcessor(t *testing.T) {
+	processor := &cancellationProcessor{started: make(chan struct{}), cancelled: make(chan error, 1)}
+	config := DefaultConfig()
+	config.Workers = 1
+	config.PollInterval = time.Millisecond
+	config.ShutdownGrace = 200 * time.Millisecond
+	coordinator, err := New(config, processor)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- coordinator.Run(ctx, "coordinator-1") }()
+	select {
+	case <-processor.started:
+	case <-time.After(time.Second):
+		t.Fatal("processor did not start")
+	}
+	cancel()
+	select {
+	case err := <-processor.cancelled:
+		if err != context.Canceled {
+			t.Fatalf("processor cancellation = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("processor did not observe coordinator cancellation")
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("coordinator did not stop after cancelling processor")
+	}
+}
+
 func (p *blockingProcessor) RunOneKinds(ctx context.Context, _ string, kinds []string, _, _ time.Duration) (bool, error) {
 	planning := false
 	for _, kind := range kinds {
@@ -144,4 +186,16 @@ func (p *reconcilingProcessor) RunOneKinds(context.Context, string, []string, ti
 func (p *reconcilingProcessor) Reconcile(context.Context) error {
 	p.once.Do(func() { close(p.reconciled) })
 	return nil
+}
+
+func (p *cancellationProcessor) RunOneKinds(ctx context.Context, _ string, kinds []string, _, _ time.Duration) (bool, error) {
+	for _, kind := range kinds {
+		if kind == "preview_plan" || kind == "final_plan" {
+			close(p.started)
+			<-ctx.Done()
+			p.cancelled <- ctx.Err()
+			return true, ctx.Err()
+		}
+	}
+	return false, nil
 }

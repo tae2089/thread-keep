@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/tae2089/thread-keep/internal/domain"
+	"github.com/tae2089/thread-keep/internal/forge"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -284,6 +285,9 @@ func (g *GormRefStore) ClaimJob(ctx context.Context, workerID string, now time.T
 	var claimed CoordinatorJob
 	found := false
 	err := g.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := recoverExpiredExhaustedJobsTx(tx, now); err != nil {
+			return err
+		}
 		query := tx.Where("((state IN ? AND next_attempt_at <= ?) OR (state = ? AND lease_until <= ?)) AND attempts < max_attempts", []CoordinatorJobState{CoordinatorJobPending, CoordinatorJobRetryable}, now, CoordinatorJobRunning, now).Order("priority DESC, next_attempt_at, job_id")
 		if g.postgres {
 			query = query.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"})
@@ -330,6 +334,9 @@ func (g *GormRefStore) ClaimJobKinds(ctx context.Context, options JobClaimOption
 		if err != nil {
 			return err
 		}
+		if err := recoverExpiredExhaustedJobsTx(tx, now); err != nil {
+			return err
+		}
 		query := tx.Where("kind IN ? AND ((state IN ? AND next_attempt_at <= ?) OR (state = ? AND lease_until <= ?)) AND attempts < max_attempts", options.Kinds, []CoordinatorJobState{CoordinatorJobPending, CoordinatorJobRetryable}, now, CoordinatorJobRunning, now).Order("priority DESC, next_attempt_at, job_id")
 		if g.postgres {
 			query = query.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"})
@@ -362,6 +369,86 @@ func (g *GormRefStore) ClaimJobKinds(ctx context.Context, options JobClaimOption
 	return claimed, found, err
 }
 
+func recoverExpiredExhaustedJobsTx(tx *gorm.DB, now time.Time) error {
+	var records []coordinatorJobRecord
+	query := tx.Where("state = ? AND lease_until <= ? AND attempts >= max_attempts", CoordinatorJobRunning, now).Order("lease_until, job_id").Limit(100)
+	if err := query.Find(&records).Error; err != nil {
+		return coordinatorStorageError("list exhausted coordinator jobs", err)
+	}
+	for _, record := range records {
+		recoveredFinal, err := recoverExhaustedFinalJobTx(tx, record, now)
+		if err != nil {
+			return err
+		}
+		if !recoveredFinal {
+			result := tx.Model(&coordinatorJobRecord{}).Where("job_id = ? AND state = ? AND fencing_token = ? AND lease_until <= ? AND attempts >= max_attempts", record.ID, CoordinatorJobRunning, record.FencingToken, now).Updates(map[string]any{"state": CoordinatorJobFailed, "failure_code": domain.CodeBusy, "lease_owner": "", "lease_until": time.Time{}})
+			if result.Error != nil {
+				return coordinatorStorageError("recover exhausted coordinator job", result.Error)
+			}
+			if result.RowsAffected != 1 {
+				continue
+			}
+		}
+		result := tx.Model(&runnerExecutionRecord{}).Where("job_id = ? AND state IN ?", record.ID, []RunnerExecutionState{RunnerExecutionPrepared, RunnerExecutionActive, RunnerExecutionCancelRequested}).Updates(map[string]any{"state": RunnerExecutionLost, "failure_code": domain.CodeBusy, "finished_at": now, "cleanup_state": RunnerCleanupPending, "cleanup_after": now, "updated_at": now})
+		if result.Error != nil {
+			return coordinatorStorageError("schedule exhausted runner cleanup", result.Error)
+		}
+	}
+	return nil
+}
+
+func recoverExhaustedFinalJobTx(tx *gorm.DB, record coordinatorJobRecord, now time.Time) (bool, error) {
+	if record.Kind != finalJobKind {
+		return false, nil
+	}
+	var payload finalJobPayload
+	if err := UnmarshalDurablePayload(record.Payload, finalJobKind, &payload); err != nil {
+		return false, nil
+	}
+	var landing landingIntentRecord
+	if err := tx.Where("landing_id = ? AND state = ?", payload.LandingID, domain.LandingRunning).Take(&landing).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return false, nil
+		}
+		return false, coordinatorStorageError("read exhausted final landing", err)
+	}
+	var generation prGenerationRecord
+	if err := generationQuery(tx, payload.RepositoryKey, payload.Change).Take(&generation).Error; err != nil {
+		return false, coordinatorStorageError("read exhausted final generation", err)
+	}
+	jobResult := tx.Model(&coordinatorJobRecord{}).Where("job_id = ? AND state = ? AND fencing_token = ? AND lease_until <= ? AND attempts >= max_attempts", record.ID, CoordinatorJobRunning, record.FencingToken, now).Updates(map[string]any{"state": CoordinatorJobDone, "result": []byte(`{"outcome":"blocked"}`), "failure_code": domain.CodeBusy, "lease_owner": "", "lease_until": time.Time{}})
+	if jobResult.Error != nil {
+		return false, coordinatorStorageError("complete exhausted final job", jobResult.Error)
+	}
+	if jobResult.RowsAffected != 1 {
+		return false, nil
+	}
+	landingResult := tx.Model(&landingIntentRecord{}).Where("landing_id = ? AND state = ? AND attempt_count = ?", landing.ID, domain.LandingRunning, landing.AttemptCount).Updates(map[string]any{"state": domain.LandingBlocked, "attempt_count": landing.AttemptCount + 1, "next_attempt_at": time.Time{}, "last_error_code": domain.CodeBusy})
+	if landingResult.Error != nil {
+		return false, coordinatorStorageError("block exhausted final landing", landingResult.Error)
+	}
+	if landingResult.RowsAffected != 1 {
+		return false, domain.NewError(domain.CodeConcurrentUpdate, errors.New("landing intent changed during exhausted recovery"))
+	}
+	planURL := ""
+	if landing.FinalPlanID != "" {
+		planURL = "/plans/" + landing.FinalPlanID
+	}
+	desired := DesiredCheck{
+		LogicalKey: DesiredCheckLogicalKey(payload.Change, generation.HeadSourceSHA),
+		Change:     payload.Change,
+		HeadSHA:    generation.HeadSourceSHA,
+		State:      forge.CheckBlocked,
+		Summary:    "Context landing retries were exhausted: Busy.",
+		PlanURL:    planURL,
+		UpdatedAt:  now.UTC(),
+	}
+	if err := persistDesiredCheckTx(tx, desired); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func (g *GormRefStore) CompleteClaim(ctx context.Context, claim JobClaim, resultPayload []byte) error {
 	return g.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error { return completeClaimTx(tx, claim, resultPayload) })
 }
@@ -371,6 +458,27 @@ func (g *GormRefStore) ValidateClaim(ctx context.Context, claim JobClaim) error 
 		return err
 	}
 	return g.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error { return validateActiveClaimTx(tx, claim) })
+}
+
+func (g *GormRefStore) AbandonClaim(ctx context.Context, claim JobClaim, now time.Time) error {
+	if err := validateJobClaim(claim); err != nil || now.IsZero() {
+		return domain.NewError(domain.CodeValidation, errors.New("abandoned coordinator job claim is incomplete"))
+	}
+	result := g.db.WithContext(ctx).Model(&coordinatorJobRecord{}).Where("job_id = ? AND state = ? AND lease_owner = ? AND fencing_token = ?", claim.JobID, CoordinatorJobRunning, claim.LeaseOwner, claim.FencingToken).Updates(map[string]any{
+		"state":           CoordinatorJobRetryable,
+		"attempts":        gorm.Expr("CASE WHEN attempts > 0 THEN attempts - 1 ELSE 0 END"),
+		"next_attempt_at": now.UTC(),
+		"lease_owner":     "",
+		"lease_until":     time.Time{},
+		"failure_code":    "",
+	})
+	if result.Error != nil {
+		return coordinatorStorageError("abandon cancelled coordinator job", result.Error)
+	}
+	if result.RowsAffected != 1 {
+		return domain.NewError(domain.CodeConcurrentUpdate, errors.New("coordinator job fencing token is stale"))
+	}
+	return nil
 }
 
 func (g *GormRefStore) RejectClaim(ctx context.Context, claim JobClaim, code domain.ErrorCode) error {
@@ -466,9 +574,9 @@ func (g *GormRefStore) Candidate(ctx context.Context, digest string) (StoredCand
 	return StoredCandidateArtifact{Digest: record.Digest, Change: domain.ChangeKey{Provider: record.Provider, Repository: record.ForgeRepository, Number: record.ChangeNumber}, Delta: delta, CreatedAt: record.CreatedAt}, nil
 }
 
-func (g *GormRefStore) Plan(ctx context.Context, planID string) (domain.ContextPlan, error) {
+func (g *GormRefStore) Plan(ctx context.Context, repositoryKey, planID string) (domain.ContextPlan, error) {
 	var record contextPlanRecord
-	if err := g.db.WithContext(ctx).Where("plan_id = ?", planID).Take(&record).Error; err != nil {
+	if err := g.db.WithContext(ctx).Where("repository_key = ? AND plan_id = ?", repositoryKey, planID).Take(&record).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return domain.ContextPlan{}, domain.NewError(domain.CodeEntityNotFound, errors.New("context plan does not exist"))
 		}

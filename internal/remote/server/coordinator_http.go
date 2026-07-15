@@ -106,7 +106,7 @@ func (s *Server) serveCoordinator(writer http.ResponseWriter, request *http.Requ
 		if err != nil {
 			return true, domain.NewError(domain.CodeValidation, errors.New("plan ID is invalid"))
 		}
-		plan, err := s.coordinator.Plan(request.Context(), planID)
+		plan, err := s.coordinator.Plan(request.Context(), repositoryKey, planID)
 		if err != nil {
 			return true, err
 		}

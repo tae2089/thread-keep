@@ -28,7 +28,7 @@ func (b *LocalBackend) Name() BackendName { return b.name }
 func (b *LocalBackend) Adoptable() bool { return false }
 
 func (b *LocalBackend) Ensure(ctx context.Context, spec ExecutionSpec) (BackendHandle, error) {
-	handle := BackendHandle{Version: 1, Backend: b.name, ResourceID: spec.AttemptID}
+	handle := BackendHandle{Version: 1, Backend: b.name, ResourceID: spec.AttemptID, ExecutionID: spec.ExecutionID, AttemptID: spec.AttemptID, RequestDigest: spec.RequestDigest, SpecDigest: spec.SpecDigest}
 	b.mu.Lock()
 	_, exists := b.results[spec.AttemptID]
 	b.mu.Unlock()
@@ -73,5 +73,15 @@ func (b *LocalBackend) Cleanup(_ context.Context, handle BackendHandle) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	delete(b.results, handle.ResourceID)
+	return nil
+}
+
+func (b *LocalBackend) CleanupDiscovered(_ context.Context, identity CleanupIdentity) error {
+	if err := validateCleanupIdentity(identity); err != nil {
+		return err
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	delete(b.results, identity.AttemptID)
 	return nil
 }

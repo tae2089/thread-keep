@@ -9,6 +9,7 @@ import (
 
 	"github.com/tae2089/thread-keep/internal/domain"
 	"github.com/tae2089/thread-keep/internal/planner"
+	"github.com/tae2089/thread-keep/internal/remote/server"
 )
 
 type fakeDockerEngine struct {
@@ -26,6 +27,7 @@ type fakeDockerEngine struct {
 	starts         int
 	stops          int
 	removes        int
+	removeTargets  []string
 	createdOnError bool
 }
 
@@ -73,8 +75,9 @@ func (f *fakeDockerEngine) Stop(context.Context, string) error {
 	return f.stopErr
 }
 
-func (f *fakeDockerEngine) Remove(context.Context, string) error {
+func (f *fakeDockerEngine) Remove(_ context.Context, target string) error {
 	f.removes++
+	f.removeTargets = append(f.removeTargets, target)
 	return f.removeErr
 }
 
@@ -198,6 +201,69 @@ func TestDockerBackendCancelAndCleanupAreNotFoundIdempotent(t *testing.T) {
 	}
 	if engine.stops != 1 || engine.removes != 1 {
 		t.Fatalf("stop/remove = %d/%d", engine.stops, engine.removes)
+	}
+}
+
+func TestDurableSourceRunnerPreservesForeignDockerContainerDuringDiscoveryCleanup(t *testing.T) {
+	store, err := server.OpenGormRefStore(t.TempDir() + "/runner.db")
+	if err != nil {
+		t.Fatalf("OpenGormRefStore() error = %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	claim := claimLifecycleJob(t, store, "worker-1")
+	spec := testDockerExecutionSpec()
+	seed := server.RunnerExecutionSeed{ExecutionID: spec.ExecutionID, JobID: claim.JobID, RequestDigest: spec.RequestDigest, SpecDigest: spec.SpecDigest, Backend: string(BackendDocker), AttemptID: spec.AttemptID, OwnerInstance: "coordinator-1"}
+	execution, err := store.PrepareRunnerExecution(context.Background(), claim, seed)
+	if err != nil {
+		t.Fatalf("PrepareRunnerExecution() error = %v", err)
+	}
+	if err := store.FailRunnerExecution(context.Background(), claim, execution.ExecutionID, execution.AttemptID, domain.CodeBusy); err != nil {
+		t.Fatalf("FailRunnerExecution() error = %v", err)
+	}
+	if err := store.MarkRunnerCleanupPending(context.Background(), execution.ExecutionID, execution.AttemptID); err != nil {
+		t.Fatalf("MarkRunnerCleanupPending() error = %v", err)
+	}
+	foreign := matchingDockerContainer(spec, DockerContainerRunning)
+	foreign.Labels[dockerLabelSpecDigest] = strings.Repeat("f", 64)
+	engine := &fakeDockerEngine{container: foreign, uploadErr: make(map[DockerUploadKind]error)}
+	backend := newTestDockerBackend(t, engine)
+	runner, err := NewDurableSourceRunner(DurableSourceRunnerConfig{Store: store, Backend: backend, InstanceID: "coordinator-1", SpecDigest: spec.SpecDigest})
+	if err != nil {
+		t.Fatalf("NewDurableSourceRunner() error = %v", err)
+	}
+	if err := runner.Reconcile(context.Background()); err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if engine.removes != 0 {
+		t.Fatalf("Remove() calls = %d, want foreign container preserved", engine.removes)
+	}
+	stored, err := store.RunnerExecution(context.Background(), execution.ExecutionID)
+	if err != nil {
+		t.Fatalf("RunnerExecution() error = %v", err)
+	}
+	if stored.CleanupState != server.RunnerCleanupFailed || stored.CleanupAttempts != 1 {
+		t.Fatalf("RunnerExecution() cleanup = %q attempts=%d, want failed/1", stored.CleanupState, stored.CleanupAttempts)
+	}
+}
+
+func TestDockerBackendDiscoveryCleanupRemovesValidatedContainerIDAndIsNotFoundIdempotent(t *testing.T) {
+	spec := testDockerExecutionSpec()
+	identity := CleanupIdentity{ExecutionID: spec.ExecutionID, AttemptID: spec.AttemptID, RequestDigest: spec.RequestDigest, SpecDigest: spec.SpecDigest}
+	engine := &fakeDockerEngine{container: matchingDockerContainer(spec, DockerContainerRunning), uploadErr: make(map[DockerUploadKind]error)}
+	backend := newTestDockerBackend(t, engine)
+	if err := backend.CleanupDiscovered(context.Background(), identity); err != nil {
+		t.Fatalf("CleanupDiscovered(existing) error = %v", err)
+	}
+	if len(engine.removeTargets) != 1 || engine.removeTargets[0] != engine.container.ID {
+		t.Fatalf("Remove() targets = %+v, want validated container ID %q", engine.removeTargets, engine.container.ID)
+	}
+	missing := &fakeDockerEngine{inspectErr: ErrDockerResourceNotFound, uploadErr: make(map[DockerUploadKind]error)}
+	backend = newTestDockerBackend(t, missing)
+	if err := backend.CleanupDiscovered(context.Background(), identity); err != nil {
+		t.Fatalf("CleanupDiscovered(missing) error = %v", err)
+	}
+	if missing.removes != 0 {
+		t.Fatalf("Remove() calls for missing container = %d, want 0", missing.removes)
 	}
 }
 

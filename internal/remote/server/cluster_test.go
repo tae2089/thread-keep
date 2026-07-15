@@ -1,15 +1,18 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -131,6 +134,40 @@ func TestPeerObjectListRejectsTrailingJSON(t *testing.T) {
 
 	if _, err := client.listObjects(t.Context(), "http://peer", "repo-1"); err == nil {
 		t.Fatal("listObjects() error = nil, want trailing JSON rejection")
+	}
+}
+
+func TestPeerObjectListAcceptsResponseLargerThanControlRequestLimit(t *testing.T) {
+	want := make([]string, 0, 256)
+	for index := 0; index < cap(want); index++ {
+		want = append(want, fmt.Sprintf("%064x", index))
+	}
+	payload, err := json.Marshal(want)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if len(payload) <= maxControlRequestBytes {
+		t.Fatalf("fixture size = %d, want above control request limit %d", len(payload), maxControlRequestBytes)
+	}
+	client := newPeerClient(testClusterSecret)
+	client.client.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(payload)), Header: make(http.Header)}, nil
+	})
+
+	got, err := client.listObjects(t.Context(), "http://peer", "repo-1")
+	if err != nil {
+		t.Fatalf("listObjects() error = %v", err)
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("listObjects() returned %d IDs, want %d", len(got), len(want))
+	}
+}
+
+func TestSingleValueJSONDecoderRejectsMaximumPlusOneByte(t *testing.T) {
+	payload := []byte("[]      x")
+	var ids []string
+	if err := decodeJSONLimitedTo(bytes.NewReader(payload), &ids, limitedJSONSingleValue, int64(len(payload)-1)); err == nil {
+		t.Fatal("decodeJSONLimitedTo(maximum + 1) error = nil")
 	}
 }
 

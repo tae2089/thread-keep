@@ -223,7 +223,7 @@ func (c *Coordinator) runWorker(ctx context.Context, workers *sync.WaitGroup, wo
 		if ctx.Err() != nil {
 			return
 		}
-		jobCtx, cancel := context.WithTimeout(context.Background(), c.config.JobTimeout)
+		jobCtx, cancel := context.WithTimeout(ctx, c.config.JobTimeout)
 		processed, err := c.processor.RunOneKinds(jobCtx, workerID, kinds, c.config.JobTimeout, c.config.LeaseDuration)
 		cancel()
 		if err != nil && c.config.OnError != nil {

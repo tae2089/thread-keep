@@ -86,7 +86,7 @@ func (e *MobyDockerEngine) Inspect(ctx context.Context, resourceID string) (Dock
 }
 
 func (e *MobyDockerEngine) Create(ctx context.Context, spec DockerCreateSpec) (DockerContainer, error) {
-	if spec.MaxRequestBytes <= 0 || spec.MaxResultBytes <= 0 || spec.CPULimitMillis > 1000_000 || spec.MemoryLimitBytes <= 0 || spec.WorkspaceLimitBytes <= 0 {
+	if spec.MaxRequestBytes <= 0 || spec.MaxResultBytes <= 0 || spec.CPULimitMillis > 1000_000 || spec.MemoryLimitBytes <= 0 || spec.WorkspaceLimitBytes <= 0 || spec.ExecutionTimeout <= 0 {
 		return DockerContainer{}, backendValidationError("Docker create bounds are invalid")
 	}
 	pidsLimit := int64(dockerRunnerPIDsLimit)
@@ -96,7 +96,7 @@ func (e *MobyDockerEngine) Create(ctx context.Context, spec DockerCreateSpec) (D
 			Image:      spec.Image,
 			User:       spec.User,
 			Entrypoint: []string{"/bin/sh", "-c"},
-			Cmd:        []string{dockerRunnerWrapper(spec.CredentialWaitTimeout)},
+			Cmd:        []string{dockerRunnerWrapper(spec.CredentialWaitTimeout, spec.ExecutionTimeout)},
 			Env:        []string{"TMPDIR=/tmp"},
 			Labels:     maps.Clone(spec.Labels),
 		},
@@ -232,14 +232,14 @@ func (b *limitedDockerBuffer) Write(content []byte) (int, error) {
 	return b.buffer.Write(content)
 }
 
-func dockerRunnerWrapper(credentialWaitTimeout time.Duration) string {
+func dockerRunnerWrapper(credentialWaitTimeout, executionTimeout time.Duration) string {
 	return fmt.Sprintf(`while [ ! -s %s ]; do sleep 0.05; done
 status=0
-%s execute --request-file=%s --credential-file=%s --result-file=%s --credential-wait-timeout=%s || status=$?
+%s execute --request-file=%s --credential-file=%s --result-file=%s --credential-wait-timeout=%s --execution-timeout=%s || status=$?
 if [ -f %s ]; then
   while [ ! -e %s ]; do sleep 0.05; done
 fi
-exit "$status"`, dockerRequestPath, dockerRunnerPath, dockerRequestPath, dockerCredentialPath, dockerResultPath, credentialWaitTimeout.String(), dockerResultPath, dockerCompletionAckPath)
+exit "$status"`, dockerRequestPath, dockerRunnerPath, dockerRequestPath, dockerCredentialPath, dockerResultPath, credentialWaitTimeout.String(), executionTimeout.String(), dockerResultPath, dockerCompletionAckPath)
 }
 
 func dockerUploadCommand(kind DockerUploadKind) ([]string, error) {

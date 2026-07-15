@@ -144,7 +144,7 @@ func (c *peerClient) listObjects(ctx context.Context, baseURL, repositoryID stri
 		return nil, fmt.Errorf("peer object list returned status %d", response.StatusCode)
 	}
 	var ids []string
-	if err := decodeJSONLimited(response.Body, &ids, limitedJSONSingleValue); err != nil {
+	if err := decodeJSONLimitedTo(response.Body, &ids, limitedJSONSingleValue, maxObjectListResponseBytes); err != nil {
 		return nil, err
 	}
 	return ids, nil

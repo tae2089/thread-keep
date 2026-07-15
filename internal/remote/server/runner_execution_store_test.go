@@ -78,6 +78,110 @@ func TestRunnerExecutionStoreAdoptsActiveAttemptWithoutStaleCancellation(t *test
 	}
 }
 
+func TestRunnerExecutionStoreRecoversExpiredExhaustedAttemptForCleanup(t *testing.T) {
+	store := openTestCoordinatorStore(t)
+	now := time.Now().UTC().Add(-time.Minute)
+	job := CoordinatorJob{ID: strings.Repeat("8", 64), DedupeKey: "preview:runner-exhausted", Kind: previewJobKind, Payload: []byte(`{"schema_version":1}`), State: CoordinatorJobPending, MaxAttempts: 1, NextAttemptAt: now}
+	if created, err := store.EnqueueJob(context.Background(), job); err != nil || !created {
+		t.Fatalf("EnqueueJob() = %t, %v", created, err)
+	}
+	claimed, ok, err := store.ClaimJobKinds(context.Background(), JobClaimOptions{WorkerID: "runner-owner-1", Kinds: []string{previewJobKind}, LeaseDuration: time.Minute})
+	if err != nil || !ok {
+		t.Fatalf("ClaimJobKinds() = %+v, %t, %v", claimed, ok, err)
+	}
+	seed := testRunnerExecutionSeed(claimed.ID)
+	execution, err := store.PrepareRunnerExecution(context.Background(), claimed.Claim(), seed)
+	if err != nil {
+		t.Fatalf("PrepareRunnerExecution() error = %v", err)
+	}
+	if err := store.RecordRunnerHandle(context.Background(), claimed.Claim(), execution.ExecutionID, execution.AttemptID, []byte(`{"version":1,"resource":"one"}`)); err != nil {
+		t.Fatalf("RecordRunnerHandle() error = %v", err)
+	}
+	if err := store.db.Model(&coordinatorJobRecord{}).Where("job_id = ?", claimed.ID).Update("lease_until", now).Error; err != nil {
+		t.Fatalf("expire exhausted claim error = %v", err)
+	}
+
+	if next, found, err := store.ClaimJobKinds(context.Background(), JobClaimOptions{WorkerID: "runner-owner-2", Kinds: []string{previewJobKind}, LeaseDuration: time.Minute}); err != nil || found {
+		t.Fatalf("ClaimJobKinds(after exhaustion) = %+v, %t, %v, want no claim", next, found, err)
+	}
+	var storedJob coordinatorJobRecord
+	if err := store.db.Where("job_id = ?", claimed.ID).Take(&storedJob).Error; err != nil {
+		t.Fatalf("read exhausted job error = %v", err)
+	}
+	if storedJob.State != CoordinatorJobFailed || storedJob.FailureCode != domain.CodeBusy || storedJob.LeaseOwner != "" || !storedJob.LeaseUntil.IsZero() {
+		t.Fatalf("exhausted job = %+v, want terminal failed", storedJob)
+	}
+	storedExecution, err := store.RunnerExecution(context.Background(), execution.ExecutionID)
+	if err != nil {
+		t.Fatalf("RunnerExecution() error = %v", err)
+	}
+	if storedExecution.State != RunnerExecutionLost || storedExecution.CleanupState != RunnerCleanupPending || storedExecution.CleanupAfter.IsZero() {
+		t.Fatalf("exhausted runner execution = %+v, want lost cleanup-pending", storedExecution)
+	}
+}
+
+func TestRunnerExecutionStoreRecoversExhaustedFinalLandingAtomically(t *testing.T) {
+	store := openTestCoordinatorStore(t)
+	now := time.Now().UTC().Add(-time.Minute)
+	generation := testPRGeneration(1, strings.Repeat("a", 40))
+	if changed, err := store.UpsertGeneration(context.Background(), generation); err != nil || !changed {
+		t.Fatalf("UpsertGeneration() = %t, %v", changed, err)
+	}
+	intent := domain.LandingIntent{ID: strings.Repeat("b", 64), RepositoryID: "repo-id", TargetRef: "refs/contexts/main", Change: generation.Change, SourceMergeSHA: strings.Repeat("c", 40), State: domain.LandingPending}
+	if created, err := store.CreateLandingIntent(context.Background(), intent); err != nil || !created {
+		t.Fatalf("CreateLandingIntent() = %t, %v", created, err)
+	}
+	if _, err := store.TransitionLanding(context.Background(), intent.ID, domain.LandingPending, domain.LandingRunning); err != nil {
+		t.Fatalf("TransitionLanding(running) error = %v", err)
+	}
+	payload, err := MarshalDurablePayload(finalJobKind, finalJobPayload{RepositoryKey: generation.RepositoryKey, LandingID: intent.ID, Change: generation.Change})
+	if err != nil {
+		t.Fatalf("MarshalDurablePayload() error = %v", err)
+	}
+	job := CoordinatorJob{ID: strings.Repeat("d", 64), DedupeKey: "final:runner-exhausted", Kind: finalJobKind, Payload: payload, State: CoordinatorJobPending, MaxAttempts: 1, NextAttemptAt: now}
+	if created, err := store.EnqueueJob(context.Background(), job); err != nil || !created {
+		t.Fatalf("EnqueueJob() = %t, %v", created, err)
+	}
+	claimed, ok, err := store.ClaimJobKinds(context.Background(), JobClaimOptions{WorkerID: "runner-owner-1", Kinds: []string{finalJobKind}, LeaseDuration: time.Minute})
+	if err != nil || !ok {
+		t.Fatalf("ClaimJobKinds() = %+v, %t, %v", claimed, ok, err)
+	}
+	seed := testRunnerExecutionSeed(claimed.ID)
+	execution, err := store.PrepareRunnerExecution(context.Background(), claimed.Claim(), seed)
+	if err != nil {
+		t.Fatalf("PrepareRunnerExecution() error = %v", err)
+	}
+	if err := store.RecordRunnerHandle(context.Background(), claimed.Claim(), execution.ExecutionID, execution.AttemptID, []byte(`{"version":1,"resource":"one"}`)); err != nil {
+		t.Fatalf("RecordRunnerHandle() error = %v", err)
+	}
+	if err := store.db.Model(&coordinatorJobRecord{}).Where("job_id = ?", claimed.ID).Update("lease_until", now).Error; err != nil {
+		t.Fatalf("expire exhausted final claim error = %v", err)
+	}
+
+	if _, found, err := store.ClaimJobKinds(context.Background(), JobClaimOptions{WorkerID: "runner-owner-2", Kinds: []string{finalJobKind}, LeaseDuration: time.Minute}); err != nil || found {
+		t.Fatalf("ClaimJobKinds(after exhaustion) found = %t, error = %v", found, err)
+	}
+	var storedJob coordinatorJobRecord
+	if err := store.db.Where("job_id = ?", claimed.ID).Take(&storedJob).Error; err != nil {
+		t.Fatalf("read recovered final job error = %v", err)
+	}
+	if storedJob.State != CoordinatorJobDone || !strings.Contains(string(storedJob.Result), `"outcome":"blocked"`) {
+		t.Fatalf("recovered final job = %+v, want completed blocked result", storedJob)
+	}
+	recovered, err := store.Landing(context.Background(), intent.ID)
+	if err != nil || recovered.State != domain.LandingBlocked || recovered.AttemptCount != 1 || recovered.LastErrorCode != domain.CodeBusy {
+		t.Fatalf("Landing(after recovery) = %+v, %v", recovered, err)
+	}
+	desired, err := store.DesiredCheck(context.Background(), DesiredCheckLogicalKey(generation.Change, generation.HeadSourceSHA))
+	if err != nil || desired.State != "blocked" {
+		t.Fatalf("DesiredCheck(after recovery) = %+v, %v", desired, err)
+	}
+	storedExecution, err := store.RunnerExecution(context.Background(), execution.ExecutionID)
+	if err != nil || storedExecution.State != RunnerExecutionLost || storedExecution.CleanupState != RunnerCleanupPending {
+		t.Fatalf("RunnerExecution(after final recovery) = %+v, %v", storedExecution, err)
+	}
+}
+
 func TestRunnerExecutionCleanupFailureRemainsEligibleAcrossReopen(t *testing.T) {
 	path := t.TempDir() + "/runner-executions.db"
 	store, err := OpenGormRefStore(path)

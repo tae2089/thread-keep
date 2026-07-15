@@ -18,14 +18,15 @@ import (
 )
 
 const (
-	routePrefix                            = "/v1/repositories/"
-	clusterSecretHeader                    = "X-Thread-Keep-Cluster-Secret"
-	maxObjectRequestBytes                  = 64 << 20
-	maxControlRequestBytes                 = 8 << 10
-	githubDialTimeout                      = 10 * time.Second
-	githubHeaderTimeout                    = 30 * time.Second
-	redirectRefusalMessage                 = "remote redirects are not followed"
-	limitedJSONFirstValue  limitedJSONMode = iota
+	routePrefix                                = "/v1/repositories/"
+	clusterSecretHeader                        = "X-Thread-Keep-Cluster-Secret"
+	maxObjectRequestBytes                      = 64 << 20
+	maxObjectListResponseBytes                 = 1 << 20
+	maxControlRequestBytes                     = 8 << 10
+	githubDialTimeout                          = 10 * time.Second
+	githubHeaderTimeout                        = 30 * time.Second
+	redirectRefusalMessage                     = "remote redirects are not followed"
+	limitedJSONFirstValue      limitedJSONMode = iota
 	limitedJSONSingleValue
 )
 
@@ -380,13 +381,19 @@ func (s *Server) serveObjectPublish(writer http.ResponseWriter, request *http.Re
 }
 
 func decodeJSONLimited(reader io.Reader, target any, mode limitedJSONMode) error {
-	limited := io.LimitReader(reader, maxControlRequestBytes)
+	return decodeJSONLimitedTo(reader, target, mode, maxControlRequestBytes)
+}
+
+func decodeJSONLimitedTo(reader io.Reader, target any, mode limitedJSONMode, maximum int64) error {
 	if mode == limitedJSONFirstValue {
-		return json.NewDecoder(limited).Decode(target)
+		return json.NewDecoder(io.LimitReader(reader, maximum)).Decode(target)
 	}
-	contents, err := io.ReadAll(limited)
+	contents, err := io.ReadAll(io.LimitReader(reader, maximum+1))
 	if err != nil {
 		return err
+	}
+	if int64(len(contents)) > maximum {
+		return errors.New("JSON input exceeds the size limit")
 	}
 	return json.Unmarshal(contents, target)
 }

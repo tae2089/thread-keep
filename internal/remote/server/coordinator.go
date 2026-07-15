@@ -235,18 +235,27 @@ func (c *Coordinator) Reconcile(ctx context.Context) error {
 func (c *Coordinator) runClaimedJob(ctx context.Context, job CoordinatorJob) (bool, error) {
 	if job.Kind == processWebhookJobKind {
 		if err := c.runWebhook(ctx, job); err != nil {
+			if abandoned, abandonErr := c.abandonCancelledClaim(ctx, job, err); abandoned {
+				return true, abandonErr
+			}
 			return true, c.handleJobFailure(job, err)
 		}
 		return true, nil
 	}
 	if job.Kind == checkJobKind {
 		if err := c.runCheck(ctx, job); err != nil {
+			if abandoned, abandonErr := c.abandonCancelledClaim(ctx, job, err); abandoned {
+				return true, abandonErr
+			}
 			return true, c.handleJobFailure(job, err)
 		}
 		return true, nil
 	}
 	if job.Kind == finalJobKind {
 		if err := c.runFinal(ctx, job); err != nil {
+			if abandoned, abandonErr := c.abandonCancelledClaim(ctx, job, err); abandoned {
+				return true, abandonErr
+			}
 			return c.handleFinalFailure(job, err)
 		}
 		return true, nil
@@ -256,9 +265,21 @@ func (c *Coordinator) runClaimedJob(ctx context.Context, job CoordinatorJob) (bo
 		return true, domain.NewError(domain.CodeValidation, errors.New("coordinator job kind is unsupported"))
 	}
 	if err := c.runPreview(ctx, job); err != nil {
+		if abandoned, abandonErr := c.abandonCancelledClaim(ctx, job, err); abandoned {
+			return true, abandonErr
+		}
 		return true, c.handleJobFailure(job, err)
 	}
 	return true, nil
+}
+
+func (c *Coordinator) abandonCancelledClaim(ctx context.Context, job CoordinatorJob, executeErr error) (bool, error) {
+	if !errors.Is(ctx.Err(), context.Canceled) || (!errors.Is(executeErr, context.Canceled) && domain.CodeOf(executeErr) != domain.CodeBusy) {
+		return false, nil
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return true, c.refs.AbandonClaim(cleanupCtx, job.Claim(), c.now().UTC())
 }
 
 func (c *Coordinator) handleJobFailure(job CoordinatorJob, executeErr error) error {
@@ -355,11 +376,14 @@ func (c *Coordinator) PlanForChange(ctx context.Context, repositoryKey string, c
 	if generation.CurrentPlanID == "" {
 		return domain.ContextPlan{}, domain.NewError(domain.CodeEntityNotFound, errors.New("current context plan is not available"))
 	}
-	return c.refs.Plan(ctx, generation.CurrentPlanID)
+	return c.refs.Plan(ctx, repositoryKey, generation.CurrentPlanID)
 }
 
-func (c *Coordinator) Plan(ctx context.Context, planID string) (domain.ContextPlan, error) {
-	return c.refs.Plan(ctx, planID)
+func (c *Coordinator) Plan(ctx context.Context, repositoryKey, planID string) (domain.ContextPlan, error) {
+	if _, err := c.repository(repositoryKey); err != nil {
+		return domain.ContextPlan{}, err
+	}
+	return c.refs.Plan(ctx, repositoryKey, planID)
 }
 
 func (c *Coordinator) Landings(ctx context.Context, repositoryKey string) ([]domain.LandingIntent, error) {

@@ -240,6 +240,27 @@ func (b *DockerBackend) Cleanup(ctx context.Context, handle BackendHandle) error
 	return dockerEngineError("remove Docker runner", err)
 }
 
+func (b *DockerBackend) CleanupDiscovered(ctx context.Context, identity CleanupIdentity) error {
+	if err := validateCleanupIdentity(identity); err != nil {
+		return err
+	}
+	container, err := b.engine.Inspect(ctx, dockerContainerName(identity.AttemptID))
+	if errors.Is(err, ErrDockerResourceNotFound) {
+		return nil
+	}
+	if err != nil {
+		return dockerEngineError("inspect Docker runner for cleanup", err)
+	}
+	if err := validateDockerContainerSpec(container, ExecutionSpec{ExecutionID: identity.ExecutionID, AttemptID: identity.AttemptID, RequestDigest: identity.RequestDigest, SpecDigest: identity.SpecDigest}); err != nil {
+		return err
+	}
+	err = b.engine.Remove(ctx, container.ID)
+	if err == nil || errors.Is(err, ErrDockerResourceNotFound) {
+		return nil
+	}
+	return dockerEngineError("remove discovered Docker runner", err)
+}
+
 func (b *DockerBackend) resumeContainer(ctx context.Context, spec ExecutionSpec, container DockerContainer) (BackendHandle, error) {
 	if err := validateDockerContainerSpec(container, spec); err != nil {
 		return BackendHandle{}, err
@@ -303,7 +324,7 @@ func validateDockerHandle(handle BackendHandle) error {
 }
 
 func dockerHandleForSpec(spec ExecutionSpec, resourceID string) BackendHandle {
-	return BackendHandle{Version: 1, Backend: BackendDocker, ResourceID: resourceID, ExecutionID: spec.ExecutionID, AttemptID: spec.AttemptID, SpecDigest: spec.SpecDigest}
+	return BackendHandle{Version: 1, Backend: BackendDocker, ResourceID: resourceID, ExecutionID: spec.ExecutionID, AttemptID: spec.AttemptID, RequestDigest: spec.RequestDigest, SpecDigest: spec.SpecDigest}
 }
 
 func dockerLabels(spec ExecutionSpec) map[string]string {

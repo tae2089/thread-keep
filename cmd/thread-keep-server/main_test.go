@@ -55,3 +55,14 @@ func TestServeUntilShutdownDrainsAndLeaves(t *testing.T) {
 		t.Fatalf("listener still accepting connections after shutdown")
 	}
 }
+
+func TestHTTPServerConfiguresRequestAndConnectionBounds(t *testing.T) {
+	handler := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
+	configured := newHTTPServer(handler)
+	if configured.ReadHeaderTimeout != serverReadHeaderTimeout || configured.ReadTimeout != serverReadTimeout || configured.WriteTimeout != serverWriteTimeout || configured.IdleTimeout != serverIdleTimeout || configured.MaxHeaderBytes != serverMaxHeaderBytes {
+		t.Fatalf("newHTTPServer() = %+v", configured)
+	}
+	if configured.ReadHeaderTimeout <= 0 || configured.ReadTimeout <= configured.ReadHeaderTimeout || configured.WriteTimeout <= 0 || configured.IdleTimeout <= 0 || configured.MaxHeaderBytes <= 0 {
+		t.Fatalf("newHTTPServer() has unbounded policy = %+v", configured)
+	}
+}

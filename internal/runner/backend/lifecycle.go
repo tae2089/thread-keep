@@ -46,12 +46,20 @@ type ExecutionSpec struct {
 }
 
 type BackendHandle struct {
-	Version     int         `json:"version"`
-	Backend     BackendName `json:"backend"`
-	ResourceID  string      `json:"resource_id"`
-	ExecutionID string      `json:"execution_id,omitempty"`
-	AttemptID   string      `json:"attempt_id,omitempty"`
-	SpecDigest  string      `json:"spec_digest,omitempty"`
+	Version       int         `json:"version"`
+	Backend       BackendName `json:"backend"`
+	ResourceID    string      `json:"resource_id"`
+	ExecutionID   string      `json:"execution_id,omitempty"`
+	AttemptID     string      `json:"attempt_id,omitempty"`
+	RequestDigest string      `json:"request_digest,omitempty"`
+	SpecDigest    string      `json:"spec_digest,omitempty"`
+}
+
+type CleanupIdentity struct {
+	ExecutionID   string
+	AttemptID     string
+	RequestDigest string
+	SpecDigest    string
 }
 
 type Observation struct {
@@ -69,6 +77,7 @@ type RunnerBackend interface {
 	Observe(ctx context.Context, handle BackendHandle) (Observation, error)
 	Cancel(ctx context.Context, handle BackendHandle) error
 	Cleanup(ctx context.Context, handle BackendHandle) error
+	CleanupDiscovered(ctx context.Context, identity CleanupIdentity) error
 }
 
 type DurableSourceRunnerConfig struct {
@@ -157,20 +166,23 @@ func (r *DurableSourceRunner) Reconcile(ctx context.Context) error {
 		if execution.Backend != string(r.backend.Name()) {
 			continue
 		}
+		var cleanupErr error
 		if len(execution.HandleEnvelope) == 0 {
-			if err := r.store.MarkRunnerCleaned(ctx, execution.ExecutionID, execution.AttemptID); err != nil {
-				return err
+			cleanupErr = r.backend.CleanupDiscovered(ctx, cleanupIdentity(execution))
+		} else {
+			var handle BackendHandle
+			if err := json.Unmarshal(execution.HandleEnvelope, &handle); err != nil {
+				if recordErr := r.store.RecordRunnerCleanupFailure(ctx, execution.ExecutionID, execution.AttemptID); recordErr != nil {
+					return recordErr
+				}
+				continue
 			}
-			continue
-		}
-		var handle BackendHandle
-		if err := json.Unmarshal(execution.HandleEnvelope, &handle); err != nil {
-			if recordErr := r.store.RecordRunnerCleanupFailure(ctx, execution.ExecutionID, execution.AttemptID); recordErr != nil {
-				return recordErr
+			handle, cleanupErr = enrichBackendHandle(handle, execution)
+			if cleanupErr == nil {
+				cleanupErr = r.backend.Cleanup(ctx, handle)
 			}
-			continue
 		}
-		if err := r.backend.Cleanup(ctx, handle); err != nil {
+		if cleanupErr != nil {
 			if recordErr := r.store.RecordRunnerCleanupFailure(ctx, execution.ExecutionID, execution.AttemptID); recordErr != nil {
 				return recordErr
 			}
@@ -179,6 +191,43 @@ func (r *DurableSourceRunner) Reconcile(ctx context.Context) error {
 		if err := r.store.MarkRunnerCleaned(ctx, execution.ExecutionID, execution.AttemptID); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func cleanupIdentity(execution server.RunnerExecution) CleanupIdentity {
+	return CleanupIdentity{ExecutionID: execution.ExecutionID, AttemptID: execution.AttemptID, RequestDigest: execution.RequestDigest, SpecDigest: execution.SpecDigest}
+}
+
+func enrichBackendHandle(handle BackendHandle, execution server.RunnerExecution) (BackendHandle, error) {
+	backendName := BackendName(execution.Backend)
+	localHandle := handle.Backend == backendName && (backendName == BackendProcess || backendName == BackendInProcess)
+	if localHandle {
+		if handle.ResourceID != execution.AttemptID {
+			return BackendHandle{}, backendValidationError("stored runner handle identity does not match the durable execution")
+		}
+		if handle.ExecutionID == "" {
+			handle.ExecutionID = execution.ExecutionID
+		}
+		if handle.AttemptID == "" {
+			handle.AttemptID = execution.AttemptID
+		}
+		if handle.SpecDigest == "" {
+			handle.SpecDigest = execution.SpecDigest
+		}
+	}
+	if handle.Backend != backendName || handle.ExecutionID != execution.ExecutionID || handle.AttemptID != execution.AttemptID || handle.SpecDigest != execution.SpecDigest || handle.RequestDigest != "" && handle.RequestDigest != execution.RequestDigest {
+		return BackendHandle{}, backendValidationError("stored runner handle identity does not match the durable execution")
+	}
+	if handle.RequestDigest == "" {
+		handle.RequestDigest = execution.RequestDigest
+	}
+	return handle, nil
+}
+
+func validateCleanupIdentity(identity CleanupIdentity) error {
+	if !validDigest(identity.ExecutionID) || !validDigest(identity.AttemptID) || !validDigest(identity.RequestDigest) || !validDigest(identity.SpecDigest) {
+		return backendValidationError("runner cleanup identity is invalid")
 	}
 	return nil
 }
@@ -241,6 +290,10 @@ func (r *DurableSourceRunner) runAttempt(ctx context.Context, claim server.JobCl
 		}
 	} else if err := json.Unmarshal(execution.HandleEnvelope, &handle); err != nil {
 		return planner.SourceEvidence{}, domain.NewError(domain.CodeIncompatiblePayload, errors.New("stored runner handle is invalid"))
+	}
+	handle, err := enrichBackendHandle(handle, execution)
+	if err != nil {
+		return planner.SourceEvidence{}, err
 	}
 	for {
 		observation, err := r.backend.Observe(ctx, handle)

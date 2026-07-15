@@ -81,6 +81,9 @@ func TestMobyDockerEngineCreatesRestrictedRunnerContainer(t *testing.T) {
 			t.Fatalf("runner wrapper %q is missing %q", wrapper, required)
 		}
 	}
+	if !strings.Contains(wrapper, "--execution-timeout=1m0s") {
+		t.Fatalf("runner wrapper %q does not propagate execution timeout", wrapper)
+	}
 	if created.HostConfig.NetworkMode != "thread-keep-runner" || !created.HostConfig.ReadonlyRootfs || created.HostConfig.RestartPolicy.Name != "no" || created.HostConfig.Privileged || created.HostConfig.AutoRemove {
 		t.Fatalf("host security config = %+v", created.HostConfig)
 	}

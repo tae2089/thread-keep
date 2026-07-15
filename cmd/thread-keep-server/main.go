@@ -18,7 +18,14 @@ import (
 	"github.com/tae2089/thread-keep/internal/remote/server"
 )
 
-const defaultGitHubAPIBaseURL = "https://api.github.com"
+const (
+	defaultGitHubAPIBaseURL = "https://api.github.com"
+	serverReadHeaderTimeout = 5 * time.Second
+	serverReadTimeout       = 15 * time.Minute
+	serverWriteTimeout      = 15 * time.Minute
+	serverIdleTimeout       = 60 * time.Second
+	serverMaxHeaderBytes    = 64 << 10
+)
 
 func main() {
 	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
@@ -150,7 +157,7 @@ func run(arguments []string, stdout io.Writer, stderr *os.File) error {
 }
 
 func serveUntilShutdown(ctx context.Context, listener net.Listener, handler http.Handler, leave func(context.Context) error, stderr io.Writer) error {
-	server := &http.Server{Handler: handler}
+	server := newHTTPServer(handler)
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- server.Serve(listener) }()
 	select {
@@ -166,4 +173,15 @@ func serveUntilShutdown(ctx context.Context, listener net.Listener, handler http
 		shutdownErr = err
 	}
 	return shutdownErr
+}
+
+func newHTTPServer(handler http.Handler) *http.Server {
+	return &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: serverReadHeaderTimeout,
+		ReadTimeout:       serverReadTimeout,
+		WriteTimeout:      serverWriteTimeout,
+		IdleTimeout:       serverIdleTimeout,
+		MaxHeaderBytes:    serverMaxHeaderBytes,
+	}
 }

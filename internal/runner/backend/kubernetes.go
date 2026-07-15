@@ -76,6 +76,11 @@ type KubernetesBackend struct {
 	ttlSecondsAfterFinished int32
 }
 
+type kubernetesCleanupResources struct {
+	job    *batchv1.Job
+	secret *corev1.Secret
+}
+
 func NewKubernetesBackend(config KubernetesBackendConfig) (*KubernetesBackend, error) {
 	if config.Client == nil || config.Artifacts == nil || strings.TrimSpace(config.Namespace) == "" || !digestPinnedRunnerImage(config.Image) || strings.TrimSpace(config.JobServiceAccount) == "" || strings.TrimSpace(config.ArtifactClaim) == "" || config.ArtifactFSGroup <= 0 || config.CPULimitMillis <= 0 || config.MemoryLimitBytes <= 0 || config.TTLSecondsAfterFinished <= 0 {
 		return nil, backendValidationError("Kubernetes backend configuration is invalid")
@@ -151,7 +156,9 @@ func (b *KubernetesBackend) Observe(ctx context.Context, handle BackendHandle) (
 		if _, err := DecodeResult(result); err != nil {
 			return Observation{}, err
 		}
-		_ = b.deleteSecret(ctx, handle.AttemptID)
+		if err := b.deleteObservedSecret(ctx, handle); err != nil {
+			return Observation{}, err
+		}
 		return Observation{State: ObservationSucceeded, ResultEnvelope: result}, nil
 	}
 	if !errors.Is(resultErr, os.ErrNotExist) {
@@ -173,10 +180,14 @@ func (b *KubernetesBackend) Observe(ctx context.Context, handle BackendHandle) (
 		}
 		switch condition.Type {
 		case batchv1.JobFailed:
-			_ = b.deleteSecret(ctx, handle.AttemptID)
+			if err := b.deleteObservedSecret(ctx, handle); err != nil {
+				return Observation{}, err
+			}
 			return Observation{State: ObservationFailed, FailureCode: domain.CodeCoverageIncomplete}, nil
 		case batchv1.JobComplete:
-			_ = b.deleteSecret(ctx, handle.AttemptID)
+			if err := b.deleteObservedSecret(ctx, handle); err != nil {
+				return Observation{}, err
+			}
 			return Observation{State: ObservationLost, FailureCode: domain.CodeCoverageIncomplete}, nil
 		}
 	}
@@ -187,23 +198,65 @@ func (b *KubernetesBackend) Cancel(ctx context.Context, handle BackendHandle) er
 	if err := validateKubernetesHandle(handle); err != nil {
 		return err
 	}
-	if err := b.deleteJob(ctx, handle.AttemptID); err != nil {
+	if !validDigest(handle.RequestDigest) {
+		return backendValidationError("Kubernetes runner cleanup handle request identity is invalid")
+	}
+	resources, err := b.discoverCleanupResources(ctx, handle.AttemptID)
+	if err != nil {
 		return err
 	}
-	return b.deleteSecret(ctx, handle.AttemptID)
+	if err := b.validatePersistedCleanupResources(resources, handle); err != nil {
+		return err
+	}
+	return b.deleteValidatedResources(ctx, resources)
 }
 
 func (b *KubernetesBackend) Cleanup(ctx context.Context, handle BackendHandle) error {
 	if err := validateKubernetesHandle(handle); err != nil {
 		return err
 	}
-	if err := b.deleteJob(ctx, handle.AttemptID); err != nil {
+	if !validDigest(handle.RequestDigest) {
+		return backendValidationError("Kubernetes runner cleanup handle request identity is invalid")
+	}
+	resources, err := b.discoverCleanupResources(ctx, handle.AttemptID)
+	if err != nil {
 		return err
 	}
-	if err := b.deleteSecret(ctx, handle.AttemptID); err != nil {
+	if err := b.validatePersistedCleanupResources(resources, handle); err != nil {
 		return err
 	}
-	return b.artifacts.Cleanup(ctx, handle.AttemptID)
+	return b.deleteCleanupResources(ctx, resources, handle.AttemptID)
+}
+
+func (b *KubernetesBackend) CleanupDiscovered(ctx context.Context, identity CleanupIdentity) error {
+	if err := validateCleanupIdentity(identity); err != nil {
+		return err
+	}
+	resources, err := b.discoverCleanupResources(ctx, identity.AttemptID)
+	if err != nil {
+		return err
+	}
+	if err := b.validateDiscoveryCleanupResources(resources, identity); err != nil {
+		return err
+	}
+	return b.deleteCleanupResources(ctx, resources, identity.AttemptID)
+}
+
+func (b *KubernetesBackend) deleteObservedSecret(ctx context.Context, handle BackendHandle) error {
+	if !validDigest(handle.RequestDigest) {
+		return backendValidationError("Kubernetes runner observe handle request identity is invalid")
+	}
+	secret, err := b.client.CoreV1().Secrets(b.namespace).Get(ctx, kubernetesSecretName(handle.AttemptID), metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return kubernetesEngineError("inspect Kubernetes runner Secret after observation", err)
+	}
+	if err := b.validatePersistedCleanupResources(kubernetesCleanupResources{secret: secret}, handle); err != nil {
+		return err
+	}
+	return b.deleteDiscoveredSecret(ctx, secret)
 }
 
 func (b *KubernetesBackend) ensureSecret(ctx context.Context, spec ExecutionSpec, credential []byte) error {
@@ -262,21 +315,107 @@ func (b *KubernetesBackend) jobForSpec(spec ExecutionSpec) *batchv1.Job {
 	}
 }
 
-func (b *KubernetesBackend) deleteJob(ctx context.Context, attemptID string) error {
-	policy := metav1.DeletePropagationBackground
-	err := b.client.BatchV1().Jobs(b.namespace).Delete(ctx, kubernetesJobName(attemptID), metav1.DeleteOptions{PropagationPolicy: &policy})
-	if err == nil || apierrors.IsNotFound(err) {
-		return nil
+func (b *KubernetesBackend) discoverCleanupResources(ctx context.Context, attemptID string) (kubernetesCleanupResources, error) {
+	resources := kubernetesCleanupResources{}
+	job, err := b.client.BatchV1().Jobs(b.namespace).Get(ctx, kubernetesJobName(attemptID), metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		job = nil
+	} else if err != nil {
+		return kubernetesCleanupResources{}, kubernetesEngineError("inspect Kubernetes runner Job for cleanup", err)
 	}
-	return kubernetesEngineError("delete Kubernetes runner Job", err)
+	resources.job = job
+	secret, err := b.client.CoreV1().Secrets(b.namespace).Get(ctx, kubernetesSecretName(attemptID), metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		secret = nil
+	} else if err != nil {
+		return kubernetesCleanupResources{}, kubernetesEngineError("inspect Kubernetes runner Secret for cleanup", err)
+	}
+	resources.secret = secret
+	return resources, nil
 }
 
-func (b *KubernetesBackend) deleteSecret(ctx context.Context, attemptID string) error {
-	err := b.client.CoreV1().Secrets(b.namespace).Delete(ctx, kubernetesSecretName(attemptID), metav1.DeleteOptions{})
+func (b *KubernetesBackend) validatePersistedCleanupResources(resources kubernetesCleanupResources, handle BackendHandle) error {
+	if resources.job != nil {
+		if resources.job.Name != kubernetesJobName(handle.AttemptID) || resources.job.Namespace != b.namespace || resources.job.UID == "" {
+			return backendValidationError("Kubernetes runner Job cleanup identity is invalid")
+		}
+		if handle.ResourceID == kubernetesJobName(handle.AttemptID) {
+			if err := validateKubernetesHandleCleanupLabels(resources.job.Labels, handle, "Job"); err != nil {
+				return err
+			}
+		} else if err := validateKubernetesJobHandle(resources.job, handle); err != nil {
+			return err
+		}
+	}
+	if resources.secret != nil {
+		if resources.secret.Name != kubernetesSecretName(handle.AttemptID) || resources.secret.Namespace != b.namespace || resources.secret.UID == "" {
+			return backendValidationError("Kubernetes runner Secret cleanup identity is invalid")
+		}
+		if err := validateKubernetesHandleCleanupLabels(resources.secret.Labels, handle, "Secret"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (b *KubernetesBackend) validateDiscoveryCleanupResources(resources kubernetesCleanupResources, identity CleanupIdentity) error {
+	if resources.job != nil {
+		if resources.job.Name != kubernetesJobName(identity.AttemptID) || resources.job.Namespace != b.namespace || resources.job.UID == "" {
+			return backendValidationError("Kubernetes runner Job cleanup identity is invalid")
+		}
+		if err := validateKubernetesCleanupLabels(resources.job.Labels, identity, "Job"); err != nil {
+			return err
+		}
+	}
+	if resources.secret != nil {
+		if resources.secret.Name != kubernetesSecretName(identity.AttemptID) || resources.secret.Namespace != b.namespace || resources.secret.UID == "" {
+			return backendValidationError("Kubernetes runner Secret cleanup identity is invalid")
+		}
+		if err := validateKubernetesCleanupLabels(resources.secret.Labels, identity, "Secret"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (b *KubernetesBackend) deleteCleanupResources(ctx context.Context, resources kubernetesCleanupResources, attemptID string) error {
+	if err := b.deleteValidatedResources(ctx, resources); err != nil {
+		return err
+	}
+	return b.artifacts.Cleanup(ctx, attemptID)
+}
+
+func (b *KubernetesBackend) deleteValidatedResources(ctx context.Context, resources kubernetesCleanupResources) error {
+	if resources.job != nil {
+		if err := b.deleteDiscoveredJob(ctx, resources.job); err != nil {
+			return err
+		}
+	}
+	if resources.secret != nil {
+		if err := b.deleteDiscoveredSecret(ctx, resources.secret); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (b *KubernetesBackend) deleteDiscoveredJob(ctx context.Context, job *batchv1.Job) error {
+	policy := metav1.DeletePropagationBackground
+	uid := job.UID
+	err := b.client.BatchV1().Jobs(b.namespace).Delete(ctx, job.Name, metav1.DeleteOptions{PropagationPolicy: &policy, Preconditions: &metav1.Preconditions{UID: &uid}})
 	if err == nil || apierrors.IsNotFound(err) {
 		return nil
 	}
-	return kubernetesEngineError("delete Kubernetes runner Secret", err)
+	return kubernetesEngineError("delete discovered Kubernetes runner Job", err)
+}
+
+func (b *KubernetesBackend) deleteDiscoveredSecret(ctx context.Context, secret *corev1.Secret) error {
+	uid := secret.UID
+	err := b.client.CoreV1().Secrets(b.namespace).Delete(ctx, secret.Name, metav1.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &uid}})
+	if err == nil || apierrors.IsNotFound(err) {
+		return nil
+	}
+	return kubernetesEngineError("delete discovered Kubernetes runner Secret", err)
 }
 
 func validateKubernetesJobSpec(job *batchv1.Job, spec ExecutionSpec) error {
@@ -287,7 +426,7 @@ func validateKubernetesJobSpec(job *batchv1.Job, spec ExecutionSpec) error {
 }
 
 func validateKubernetesJobHandle(job *batchv1.Job, handle BackendHandle) error {
-	if job == nil || string(job.UID) != handle.ResourceID || job.Labels[kubernetesLabelManaged] != "true" || job.Labels[kubernetesLabelExecutionID] != handle.ExecutionID || job.Labels[kubernetesLabelAttemptID] != handle.AttemptID || job.Labels[kubernetesLabelSpecDigest] != handle.SpecDigest {
+	if job == nil || string(job.UID) != handle.ResourceID || job.Labels[kubernetesLabelManaged] != "true" || job.Labels[kubernetesLabelExecutionID] != handle.ExecutionID || job.Labels[kubernetesLabelAttemptID] != handle.AttemptID || (handle.RequestDigest != "" && job.Labels[kubernetesLabelRequestDigest] != handle.RequestDigest) || job.Labels[kubernetesLabelSpecDigest] != handle.SpecDigest {
 		return backendValidationError("Kubernetes runner Job identity does not match the stored handle")
 	}
 	return nil
@@ -296,6 +435,20 @@ func validateKubernetesJobHandle(job *batchv1.Job, handle BackendHandle) error {
 func validateKubernetesSecret(secret *corev1.Secret, spec ExecutionSpec, credential []byte) error {
 	if secret == nil || secret.Labels[kubernetesLabelManaged] != "true" || secret.Labels[kubernetesLabelAttemptID] != spec.AttemptID || secret.Labels[kubernetesLabelSpecDigest] != spec.SpecDigest || subtle.ConstantTimeCompare(secret.Data[kubernetesCredentialKey], credential) != 1 {
 		return backendValidationError("Kubernetes runner Secret identity does not match the execution spec")
+	}
+	return nil
+}
+
+func validateKubernetesCleanupLabels(labels map[string]string, identity CleanupIdentity, resource string) error {
+	if labels[kubernetesLabelManaged] != "true" || labels[kubernetesLabelExecutionID] != identity.ExecutionID || labels[kubernetesLabelAttemptID] != identity.AttemptID || labels[kubernetesLabelRequestDigest] != identity.RequestDigest || labels[kubernetesLabelSpecDigest] != identity.SpecDigest {
+		return backendValidationError("Kubernetes runner " + resource + " identity does not match cleanup identity")
+	}
+	return nil
+}
+
+func validateKubernetesHandleCleanupLabels(labels map[string]string, handle BackendHandle, resource string) error {
+	if labels[kubernetesLabelManaged] != "true" || labels[kubernetesLabelExecutionID] != handle.ExecutionID || labels[kubernetesLabelAttemptID] != handle.AttemptID || labels[kubernetesLabelRequestDigest] != handle.RequestDigest || labels[kubernetesLabelSpecDigest] != handle.SpecDigest {
+		return backendValidationError("Kubernetes runner " + resource + " identity does not match stored handle")
 	}
 	return nil
 }
@@ -316,7 +469,7 @@ func kubernetesJobName(attemptID string) string { return "thread-keep-runner-" +
 func kubernetesSecretName(attemptID string) string { return "thread-keep-secret-" + attemptID[:24] }
 
 func kubernetesHandleForSpec(spec ExecutionSpec, resourceID string) BackendHandle {
-	return BackendHandle{Version: 1, Backend: BackendKubernetesJob, ResourceID: resourceID, ExecutionID: spec.ExecutionID, AttemptID: spec.AttemptID, SpecDigest: spec.SpecDigest}
+	return BackendHandle{Version: 1, Backend: BackendKubernetesJob, ResourceID: resourceID, ExecutionID: spec.ExecutionID, AttemptID: spec.AttemptID, RequestDigest: spec.RequestDigest, SpecDigest: spec.SpecDigest}
 }
 
 func kubernetesEngineError(operation string, err error) error {

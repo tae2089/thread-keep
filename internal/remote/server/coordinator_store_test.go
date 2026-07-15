@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -53,6 +54,25 @@ func TestCoordinatorStoreRejectsStaleGenerationPlanPublication(t *testing.T) {
 	}
 }
 
+func TestCoordinatorStoreScopesPlanLookupToRepository(t *testing.T) {
+	store := openTestCoordinatorStore(t)
+	generation := testPRGeneration(1, "head-one")
+	if changed, err := store.UpsertGeneration(context.Background(), generation); err != nil || !changed {
+		t.Fatalf("UpsertGeneration() = %t, %v", changed, err)
+	}
+	plan := domain.ContextPlan{SchemaVersion: 1, ID: strings.Repeat("9", 64), Kind: domain.ContextPlanPreview, Fingerprint: domain.PlanFingerprint{RepositoryID: "repo-id", TargetRef: "refs/contexts/main", Change: generation.Change}, Outcome: domain.ContextPlanReady, CreatedAt: time.Now().UTC()}
+	if err := store.SaveCurrentPlan(context.Background(), generation, plan); err != nil {
+		t.Fatalf("SaveCurrentPlan() error = %v", err)
+	}
+	if _, err := store.Plan(context.Background(), "other-repository", plan.ID); domain.CodeOf(err) != domain.CodeEntityNotFound {
+		t.Fatalf("Plan(other repository) error = %v, want entity not found", err)
+	}
+	got, err := store.Plan(context.Background(), generation.RepositoryKey, plan.ID)
+	if err != nil || got.ID != plan.ID {
+		t.Fatalf("Plan(owning repository) = %+v, %v", got, err)
+	}
+}
+
 func TestCoordinatorStoreClaimsOneLeaseAndReclaimsExpiredJob(t *testing.T) {
 	store := openTestCoordinatorStore(t)
 	now := time.Now().UTC()
@@ -90,6 +110,45 @@ func TestCoordinatorStoreClaimsOneLeaseAndReclaimsExpiredJob(t *testing.T) {
 	claimed, ok, err := store.ClaimJob(context.Background(), "worker-3", now.Add(2*time.Minute), time.Minute)
 	if err != nil || !ok || claimed.ID != job.ID || claimed.LeaseOwner != "worker-3" || claimed.Attempts != 2 {
 		t.Fatalf("ClaimJob(expired) = %+v, %t, %v", claimed, ok, err)
+	}
+}
+
+func TestCoordinatorShutdownCancellationAbandonsClaimWithoutConsumingAttemptOrFailingLanding(t *testing.T) {
+	store := openTestCoordinatorStore(t)
+	now := time.Now().UTC()
+	intent := domain.LandingIntent{ID: strings.Repeat("6", 64), RepositoryID: "repo-id", TargetRef: "refs/contexts/main", Change: domain.ChangeKey{Provider: "github", Repository: "owner/repository", Number: 42}, SourceMergeSHA: strings.Repeat("7", 40), State: domain.LandingPending}
+	if created, err := store.CreateLandingIntent(context.Background(), intent); err != nil || !created {
+		t.Fatalf("CreateLandingIntent() = %t, %v", created, err)
+	}
+	running, err := store.TransitionLanding(context.Background(), intent.ID, domain.LandingPending, domain.LandingRunning)
+	if err != nil {
+		t.Fatalf("TransitionLanding(running) error = %v", err)
+	}
+	job := CoordinatorJob{ID: strings.Repeat("5", 64), DedupeKey: "final:cancelled-claim", Kind: finalJobKind, Payload: []byte(`{"schema_version":1}`), State: CoordinatorJobPending, MaxAttempts: 3, NextAttemptAt: now.Add(-time.Minute)}
+	if created, err := store.EnqueueJob(context.Background(), job); err != nil || !created {
+		t.Fatalf("EnqueueJob() = %t, %v", created, err)
+	}
+	claimed, ok, err := store.ClaimJob(context.Background(), "worker-1", now, time.Minute)
+	if err != nil || !ok || claimed.Attempts != 1 {
+		t.Fatalf("ClaimJob() = %+v, %t, %v", claimed, ok, err)
+	}
+	coordinator := &Coordinator{refs: store, now: func() time.Time { return now.Add(time.Second) }}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	abandoned, err := coordinator.abandonCancelledClaim(ctx, claimed, domain.NewError(domain.CodeBusy, errors.New("runner cancelled")))
+	if err != nil || !abandoned {
+		t.Fatalf("abandonCancelledClaim() = %t, %v", abandoned, err)
+	}
+	var record coordinatorJobRecord
+	if err := store.db.Where("job_id = ?", claimed.ID).Take(&record).Error; err != nil {
+		t.Fatalf("read abandoned job error = %v", err)
+	}
+	if record.State != CoordinatorJobRetryable || record.Attempts != 0 || record.LeaseOwner != "" || !record.LeaseUntil.IsZero() {
+		t.Fatalf("abandoned job = %+v, want retryable without consumed attempt", record)
+	}
+	got, err := store.Landing(context.Background(), intent.ID)
+	if err != nil || got.State != domain.LandingRunning || got.AttemptCount != running.AttemptCount || got.LastErrorCode != "" {
+		t.Fatalf("Landing(after shutdown cancellation) = %+v, %v; want unchanged running landing", got, err)
 	}
 }
 

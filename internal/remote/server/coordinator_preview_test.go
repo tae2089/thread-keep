@@ -167,7 +167,10 @@ func TestCoordinatorHTTPRoutesExposeCapabilitiesAndCurrentPlan(t *testing.T) {
 		_, _ = writer.Write([]byte(`{"permissions":{"push":true,"pull":true}}`))
 	}))
 	t.Cleanup(githubAPI.Close)
-	handler, err := NewCoordinatorHandler(store, coordinator, Config{GitHubAPIBaseURL: githubAPI.URL, Repositories: map[string]RepositoryConfig{"repo": {GitHubOwner: "owner", GitHubRepo: "repository"}}})
+	handler, err := NewCoordinatorHandler(store, coordinator, Config{GitHubAPIBaseURL: githubAPI.URL, Repositories: map[string]RepositoryConfig{
+		"repo":  {GitHubOwner: "owner", GitHubRepo: "repository"},
+		"other": {GitHubOwner: "owner", GitHubRepo: "other"},
+	}})
 	if err != nil {
 		t.Fatalf("NewCoordinatorHandler() error = %v", err)
 	}
@@ -210,8 +213,16 @@ func TestCoordinatorHTTPRoutesExposeCapabilitiesAndCurrentPlan(t *testing.T) {
 	if processed, err := coordinator.RunOne(context.Background(), "worker-http", time.Now().UTC()); err != nil || !processed {
 		t.Fatalf("RunOne(preview) = %t, %v", processed, err)
 	}
-	if status, payload := call(t, http.MethodGet, server.URL+"/v1/repositories/repo/pull-requests/42/plan", readerToken, nil); status != http.StatusOK || !bytes.Contains(payload, []byte(`"kind":"preview"`)) {
+	status, payload := call(t, http.MethodGet, server.URL+"/v1/repositories/repo/pull-requests/42/plan", readerToken, nil)
+	if status != http.StatusOK || !bytes.Contains(payload, []byte(`"kind":"preview"`)) {
 		t.Fatalf("GET current plan = %d %s", status, payload)
+	}
+	var plan domain.ContextPlan
+	if err := json.Unmarshal(payload, &plan); err != nil {
+		t.Fatalf("decode current plan error = %v", err)
+	}
+	if status, _ := call(t, http.MethodGet, server.URL+"/v1/repositories/other/plans/"+plan.ID, readerToken, nil); status != http.StatusNotFound {
+		t.Fatalf("GET plan through another repository = %d, want 404", status)
 	}
 	if status, _ := call(t, http.MethodGet, server.URL+"/v1/repositories/repo/landings/missing/recovery", readerToken, nil); status != http.StatusForbidden {
 		t.Fatalf("GET landing recovery with pull-only token = %d, want 403", status)
@@ -329,7 +340,10 @@ func newTestCoordinator(t *testing.T) (*Coordinator, *CompositeStorage, *preview
 	target := entity
 	target.SourceSHA = headSHA
 	evidence := planner.SourceEvidence{RepositoryID: "context-repo", TargetRef: "refs/contexts/main", Mode: planner.SourcePreview, SourceSHA: headSHA, PreviewIdentity: strings.Repeat("d", 64), GitTreeDigest: strings.Repeat("e", 40), EntityShapeDigest: domain.DigestSourceEvidence([]domain.Entity{target}), Entities: []domain.Entity{target}, Provenance: []domain.ContextSnapshotProvenance{{Language: "go", IndexerID: "builtin/go", IndexerVersion: "1", SourceSHA: headSHA}}, CoverageComplete: true, WorkerVersion: "test"}
-	coordinator, err := NewCoordinator(CoordinatorConfig{Refs: store.refs, Objects: store, Forge: fakeForge, Runner: previewFakeRunner{evidence: evidence}, Repositories: []CoordinatorRepository{{RemoteKey: "repo", ContextRepositoryID: "context-repo", TargetRef: "refs/contexts/main", ForgeRepository: "owner/repository", InstallationID: 7, AutomaticLanding: true}}})
+	coordinator, err := NewCoordinator(CoordinatorConfig{Refs: store.refs, Objects: store, Forge: fakeForge, Runner: previewFakeRunner{evidence: evidence}, Repositories: []CoordinatorRepository{
+		{RemoteKey: "repo", ContextRepositoryID: "context-repo", TargetRef: "refs/contexts/main", ForgeRepository: "owner/repository", InstallationID: 7, AutomaticLanding: true},
+		{RemoteKey: "other", ContextRepositoryID: "other-context-repo", TargetRef: "refs/contexts/main", ForgeRepository: "owner/other", InstallationID: 7},
+	}})
 	if err != nil {
 		t.Fatalf("NewCoordinator() error = %v", err)
 	}

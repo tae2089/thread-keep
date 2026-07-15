@@ -21,6 +21,7 @@ import (
 	"github.com/tae2089/thread-keep/internal/gitrepo"
 	"github.com/tae2089/thread-keep/internal/remote"
 	"github.com/tae2089/thread-keep/internal/remote/server"
+	"github.com/tae2089/thread-keep/internal/store"
 )
 
 type indexCoordinatorFunc func(context.Context, string, string) ([]domain.LanguageProjection, error)
@@ -47,8 +48,16 @@ func (w *Worker) Process() {}
 	if err := svc.Init(context.Background()); err != nil {
 		t.Fatalf("Init() error = %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(repo, ".git", "thread-keep", "index.sqlite")); err != nil {
+	if _, err := os.Stat(localDatabasePath(repo)); err != nil {
 		t.Fatalf("index database missing: %v", err)
+	}
+	command := exec.Command("git", "-C", repo, "status", "--porcelain")
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git status: %v\n%s", err, output)
+	}
+	if len(output) != 0 {
+		t.Fatalf("git status after Init() = %q, want clean", output)
 	}
 
 	result, err := svc.Update(context.Background())
@@ -65,6 +74,49 @@ func (w *Worker) Process() {}
 	}
 	if status.EntityCount != 3 {
 		t.Fatalf("EntityCount = %d, want 3", status.EntityCount)
+	}
+}
+
+func TestStatusMigratesLegacyStorageIntoWorktree(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repo := newGitRepo(t, map[string]string{"example.go": "package example\n\nfunc Run() {}\n"})
+	state, err := gitrepo.Discover(ctx, repo)
+	if err != nil {
+		t.Fatalf("Discover() error = %v", err)
+	}
+	legacyLayout := store.LegacyLayout(state.CommonDir)
+	legacyStore, err := store.Open(ctx, legacyLayout)
+	if err != nil {
+		t.Fatalf("Open(legacy) error = %v", err)
+	}
+	key := domain.WorkingSetKey{RepositoryID: state.RepositoryID, WorktreeID: state.WorktreeID, RefName: state.RefName(), SourceSHA: state.HeadSHA}
+	entity := domain.Entity{Language: "go", Key: "example.Run", Kind: "function", Name: "Run", Signature: "func()", Path: "example.go", StartLine: 3, EndLine: 3, SourceSHA: state.HeadSHA, StructuralHash: "hash"}
+	projection := domain.LanguageProjection{Coverage: domain.Coverage{Language: "go", State: domain.CoverageIndexed, IndexerID: "builtin/go", IndexerVersion: "1", SourceSHA: state.HeadSHA}, Entities: []domain.Entity{entity}}
+	if err := legacyStore.ApplyIndexUpdate(ctx, key, []domain.LanguageProjection{projection}); err != nil {
+		t.Fatalf("ApplyIndexUpdate(legacy) error = %v", err)
+	}
+	if err := legacyStore.Close(); err != nil {
+		t.Fatalf("Close(legacy) error = %v", err)
+	}
+
+	svc, err := Open(ctx, repo)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer svc.Close()
+	status, err := svc.Status(ctx)
+	if err != nil {
+		t.Fatalf("Status() error = %v", err)
+	}
+	if status.EntityCount != 1 || status.SourceSHA != state.HeadSHA {
+		t.Fatalf("Status() = %+v, want migrated entity at current source", status)
+	}
+	if _, err := os.Stat(filepath.Join(repo, ".thread-keep", "index.sqlite")); err != nil {
+		t.Fatalf("current database missing: %v", err)
+	}
+	if _, err := os.Stat(legacyLayout.Database); err != nil {
+		t.Fatalf("legacy database was not preserved: %v", err)
 	}
 }
 
@@ -390,7 +442,7 @@ func Authorize() error { return nil }
 	if commit.ID == "" {
 		t.Fatal("commit ID is empty")
 	}
-	contents, err := os.ReadFile(filepath.Join(repo, ".git", "thread-keep", "objects", commit.ID+".json"))
+	contents, err := os.ReadFile(localObjectPath(repo, commit.ID))
 	if err != nil {
 		t.Fatalf("read context object: %v", err)
 	}
@@ -463,7 +515,7 @@ func TestReviseNoteCreatesNewImmutableRevision(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Commit(second) error = %v", err)
 	}
-	contents, err := os.ReadFile(filepath.Join(repo, ".git", "thread-keep", "objects", second.ID+".json"))
+	contents, err := os.ReadFile(localObjectPath(repo, second.ID))
 	if err != nil {
 		t.Fatalf("ReadFile(second object): %v", err)
 	}
@@ -529,7 +581,7 @@ func TestUpdateMarksChangedBoundNoteForReviewBeforeCommit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Commit(changed) error = %v", err)
 	}
-	contents, err := os.ReadFile(filepath.Join(repo, ".git", "thread-keep", "objects", committed.ID+".json"))
+	contents, err := os.ReadFile(localObjectPath(repo, committed.ID))
 	if err != nil {
 		t.Fatalf("ReadFile(reconciled object): %v", err)
 	}
@@ -922,7 +974,7 @@ func TestCommitPreservesPendingNotesWhenObjectWriteFails(t *testing.T) {
 	if _, err := svc.AddNote(context.Background(), AddNoteInput{EntityKey: "example.Run", Kind: "intent", Body: "keep this note", Author: "tester"}); err != nil {
 		t.Fatalf("AddNote() error = %v", err)
 	}
-	objectDir := filepath.Join(repo, ".git", "thread-keep", "objects")
+	objectDir := localObjectDir(repo)
 	if err := os.RemoveAll(objectDir); err != nil {
 		t.Fatalf("remove object directory: %v", err)
 	}
@@ -953,7 +1005,7 @@ func TestUpdateRequiresInit(t *testing.T) {
 	if _, err := svc.Update(context.Background()); domain.CodeOf(err) != domain.CodeNotInitialized {
 		t.Fatalf("Update() error = %v, want not initialized", err)
 	}
-	if _, err := os.Stat(filepath.Join(repo, ".git", "thread-keep", "index.sqlite")); !os.IsNotExist(err) {
+	if _, err := os.Stat(localDatabasePath(repo)); !os.IsNotExist(err) {
 		t.Fatalf("database exists before init: %v", err)
 	}
 }
@@ -1665,7 +1717,7 @@ func TestAssembleContextHistoryRejectsMissingImmutableAncestry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Commit() error = %v", err)
 	}
-	if err := os.Remove(filepath.Join(repo, ".git", "thread-keep", "objects", commit.ID+".json")); err != nil {
+	if err := os.Remove(localObjectPath(repo, commit.ID)); err != nil {
 		t.Fatalf("Remove(context object) error = %v", err)
 	}
 	if _, err := svc.AssembleContext(ctx, domain.ContextQuery{
@@ -1755,7 +1807,7 @@ func TestRebuildRestoresNoteTopics(t *testing.T) {
 	if err := svc.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
-	if err := os.Remove(filepath.Join(repo, ".git", "thread-keep", "index.sqlite")); err != nil {
+	if err := os.Remove(localDatabasePath(repo)); err != nil {
 		t.Fatalf("Remove(projection) error = %v", err)
 	}
 	svc, err = Open(ctx, repo)
@@ -2194,7 +2246,7 @@ func TestCommitMergeCreatesTwoParentSnapshotFromNonOverlappingNotes(t *testing.T
 	if err != nil {
 		t.Fatalf("Commit(local) error = %v", err)
 	}
-	baseBytes, err := os.ReadFile(filepath.Join(repo, ".git", "thread-keep", "objects", base.ID+".json"))
+	baseBytes, err := os.ReadFile(localObjectPath(repo, base.ID))
 	if err != nil {
 		t.Fatalf("read base snapshot: %v", err)
 	}
@@ -2226,7 +2278,7 @@ func TestCommitMergeCreatesTwoParentSnapshotFromNonOverlappingNotes(t *testing.T
 	if err != nil {
 		t.Fatalf("CommitMerge() error = %v", err)
 	}
-	mergedBytes, err := os.ReadFile(filepath.Join(repo, ".git", "thread-keep", "objects", merged.ID+".json"))
+	mergedBytes, err := os.ReadFile(localObjectPath(repo, merged.ID))
 	if err != nil {
 		t.Fatalf("read merged snapshot: %v", err)
 	}
@@ -2269,7 +2321,7 @@ func TestCommitMergeCreatesTwoParentSnapshotFromNonOverlappingNotes(t *testing.T
 	if err := svc.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
-	if err := os.Remove(filepath.Join(repo, ".git", "thread-keep", "index.sqlite")); err != nil {
+	if err := os.Remove(localDatabasePath(repo)); err != nil {
 		t.Fatalf("remove projection: %v", err)
 	}
 	svc, err = Open(ctx, repo)
@@ -2351,7 +2403,7 @@ func TestCommitMergeUsesAuthoredResolutionForCompetingSuccessors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Commit(local) error = %v", err)
 	}
-	baseBytes, err := os.ReadFile(filepath.Join(repo, ".git", "thread-keep", "objects", base.ID+".json"))
+	baseBytes, err := os.ReadFile(localObjectPath(repo, base.ID))
 	if err != nil {
 		t.Fatalf("read base snapshot: %v", err)
 	}
@@ -2406,7 +2458,7 @@ func TestCommitMergeUsesAuthoredResolutionForCompetingSuccessors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CommitMerge() error = %v", err)
 	}
-	mergedBytes, err := os.ReadFile(filepath.Join(repo, ".git", "thread-keep", "objects", merged.ID+".json"))
+	mergedBytes, err := os.ReadFile(localObjectPath(repo, merged.ID))
 	if err != nil {
 		t.Fatalf("read merged snapshot: %v", err)
 	}
@@ -2428,7 +2480,7 @@ func containsBindingState(notes []domain.Note, state domain.NoteBindingState) bo
 	return false
 }
 
-func TestLinkedWorktreesKeepPendingNotesSeparate(t *testing.T) {
+func TestLinkedWorktreesUseIndependentLocalStores(t *testing.T) {
 	repo := newGitRepo(t, map[string]string{"example.go": "package example\nfunc Run() {}\n"})
 	primary, err := Open(context.Background(), repo)
 	if err != nil {
@@ -2452,6 +2504,12 @@ func TestLinkedWorktreesKeepPendingNotesSeparate(t *testing.T) {
 		t.Fatalf("Open(linked) error = %v", err)
 	}
 	defer linkedService.Close()
+	if _, err := linkedService.Update(context.Background()); domain.CodeOf(err) != domain.CodeNotInitialized {
+		t.Fatalf("Update(linked before init) error = %v, want not_initialized", err)
+	}
+	if err := linkedService.Init(context.Background()); err != nil {
+		t.Fatalf("Init(linked) error = %v", err)
+	}
 	if _, err := linkedService.Update(context.Background()); err != nil {
 		t.Fatalf("Update(linked) error = %v", err)
 	}
@@ -2465,8 +2523,15 @@ func TestLinkedWorktreesKeepPendingNotesSeparate(t *testing.T) {
 	if _, err := linkedService.AddNote(context.Background(), AddNoteInput{EntityKey: "example.Run", Kind: "intent", Body: "linked note", Author: "tester"}); err != nil {
 		t.Fatalf("AddNote(linked) error = %v", err)
 	}
-	if _, err := linkedService.Commit(context.Background(), CommitInput{Message: "linked context", Author: "tester"}); err != nil {
+	linkedCommit, err := linkedService.Commit(context.Background(), CommitInput{Message: "linked context", Author: "tester"})
+	if err != nil {
 		t.Fatalf("Commit(linked) error = %v", err)
+	}
+	if _, err := os.Stat(localObjectPath(linked, linkedCommit.ID)); err != nil {
+		t.Fatalf("linked context object missing: %v", err)
+	}
+	if _, err := os.Stat(localObjectPath(repo, linkedCommit.ID)); !os.IsNotExist(err) {
+		t.Fatalf("linked context object exists in primary store: %v", err)
 	}
 	primaryStatus, err := primary.Status(context.Background())
 	if err != nil {
@@ -2507,7 +2572,7 @@ func TestRebuildRestoresDeletedProjection(t *testing.T) {
 	if err := svc.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
-	database := filepath.Join(repo, ".git", "thread-keep", "index.sqlite")
+	database := localDatabasePath(repo)
 	if err := os.Remove(database); err != nil {
 		t.Fatalf("Remove(database) error = %v", err)
 	}
@@ -2563,7 +2628,7 @@ func TestRebuildRejectsV3SnapshotForDifferentSourceBeforeCreatingProjection(t *t
 	if err := svc.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
-	if err := os.Remove(filepath.Join(repo, ".git", "thread-keep", "index.sqlite")); err != nil {
+	if err := os.Remove(localDatabasePath(repo)); err != nil {
 		t.Fatalf("Remove(index.sqlite) error = %v", err)
 	}
 	writeFile(t, filepath.Join(repo, "example.go"), "package example\nfunc Run() { println(\"new source\") }\n")
@@ -2578,7 +2643,7 @@ func TestRebuildRejectsV3SnapshotForDifferentSourceBeforeCreatingProjection(t *t
 	if _, err := rebuilt.Rebuild(ctx, commit.ID); domain.CodeOf(err) != domain.CodeStaleWorkingSet {
 		t.Fatalf("Rebuild() error = %v, want stale working set", err)
 	}
-	if _, err := os.Stat(filepath.Join(repo, ".git", "thread-keep", "index.sqlite")); !os.IsNotExist(err) {
+	if _, err := os.Stat(localDatabasePath(repo)); !os.IsNotExist(err) {
 		t.Fatalf("index.sqlite exists after rejected source mismatch: %v", err)
 	}
 }
@@ -2606,7 +2671,7 @@ func TestRebuildRejectsV3SnapshotForDifferentIndexerProvenanceBeforeCreatingProj
 	if err := svc.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
-	if err := os.Remove(filepath.Join(repo, ".git", "thread-keep", "index.sqlite")); err != nil {
+	if err := os.Remove(localDatabasePath(repo)); err != nil {
 		t.Fatalf("Remove(index.sqlite) error = %v", err)
 	}
 
@@ -2624,7 +2689,7 @@ func TestRebuildRejectsV3SnapshotForDifferentIndexerProvenanceBeforeCreatingProj
 	if _, err := rebuilt.Rebuild(ctx, commit.ID); domain.CodeOf(err) != domain.CodeStaleWorkingSet {
 		t.Fatalf("Rebuild() error = %v, want stale working set", err)
 	}
-	if _, err := os.Stat(filepath.Join(repo, ".git", "thread-keep", "index.sqlite")); !os.IsNotExist(err) {
+	if _, err := os.Stat(localDatabasePath(repo)); !os.IsNotExist(err) {
 		t.Fatalf("index.sqlite exists after rejected provenance mismatch: %v", err)
 	}
 }
@@ -2678,7 +2743,7 @@ func TestRebuildDoesNotCreateProjectionWhenIndexingFailsOrSourceChanges(t *testi
 			if err := svc.Close(); err != nil {
 				t.Fatalf("Close() error = %v", err)
 			}
-			if err := os.Remove(filepath.Join(repo, ".git", "thread-keep", "index.sqlite")); err != nil {
+			if err := os.Remove(localDatabasePath(repo)); err != nil {
 				t.Fatalf("remove projection: %v", err)
 			}
 
@@ -2691,7 +2756,7 @@ func TestRebuildDoesNotCreateProjectionWhenIndexingFailsOrSourceChanges(t *testi
 			if _, err := rebuilt.Rebuild(ctx, commit.ID); domain.CodeOf(err) != test.wantCode {
 				t.Fatalf("Rebuild() error = %v, want %s", err, test.wantCode)
 			}
-			if _, err := os.Stat(filepath.Join(repo, ".git", "thread-keep", "index.sqlite")); !os.IsNotExist(err) {
+			if _, err := os.Stat(localDatabasePath(repo)); !os.IsNotExist(err) {
 				t.Fatalf("projection database exists after pre-publish failure: %v", err)
 			}
 		})
@@ -3005,6 +3070,18 @@ func writeFile(t *testing.T, path, body string) {
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatalf("WriteFile(%q): %v", path, err)
 	}
+}
+
+func localDatabasePath(repo string) string {
+	return filepath.Join(repo, ".thread-keep", "index.sqlite")
+}
+
+func localObjectDir(repo string) string {
+	return filepath.Join(repo, ".thread-keep", "objects")
+}
+
+func localObjectPath(repo, identifier string) string {
+	return filepath.Join(localObjectDir(repo), identifier+".json")
 }
 
 func git(t *testing.T, repo string, args ...string) {

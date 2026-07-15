@@ -18,6 +18,7 @@ type Service struct {
 	workingDirectory string
 	commonDir        string
 	layout           store.Layout
+	legacyLayout     store.Layout
 	store            *store.Store
 	indexer          indexCoordinator
 	discover         stateDiscoverer
@@ -126,7 +127,8 @@ func Open(ctx context.Context, workingDirectory string) (*Service, error) {
 	return &Service{
 		workingDirectory: state.Root,
 		commonDir:        state.CommonDir,
-		layout:           store.NewLayout(state.CommonDir),
+		layout:           store.NewLayout(state.Root),
+		legacyLayout:     store.LegacyLayout(state.CommonDir),
 		indexer:          indexing.NewCoordinator(),
 		discover:         gitrepo.Discover,
 	}, nil
@@ -208,6 +210,9 @@ func keyForState(state gitrepo.State) domain.WorkingSetKey {
 func (s *Service) openStore(ctx context.Context, create bool) (*store.Store, error) {
 	if s.store != nil {
 		return s.store, nil
+	}
+	if _, err := store.MigrateLegacy(ctx, s.legacyLayout, s.layout); err != nil {
+		return nil, err
 	}
 	if !create {
 		if _, err := os.Stat(s.layout.Database); err != nil {

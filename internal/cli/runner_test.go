@@ -368,7 +368,7 @@ func TestRunnerRebuildRestoresDeletedProjection(t *testing.T) {
 	if err := json.Unmarshal([]byte(commitJSON), &commit); err != nil {
 		t.Fatalf("decode commit JSON: %v", err)
 	}
-	if err := os.Remove(filepath.Join(repo, ".git", "thread-keep", "index.sqlite")); err != nil {
+	if err := os.Remove(localDatabasePath(repo)); err != nil {
 		t.Fatalf("remove projection: %v", err)
 	}
 
@@ -532,6 +532,10 @@ func writeFile(t *testing.T, path, contents string) {
 	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
 		t.Fatalf("WriteFile(%q): %v", path, err)
 	}
+}
+
+func localDatabasePath(repo string) string {
+	return filepath.Join(repo, ".thread-keep", "index.sqlite")
 }
 
 func git(t *testing.T, repo string, args ...string) {

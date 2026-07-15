@@ -100,21 +100,21 @@ Use the CLI first:
   committed context.
 - `thread-keep log` shows immutable context history.
 
-Thread Keep stores local data outside the source tree, under the repository's Git
-common directory:
-
-```bash
-git rev-parse --git-common-dir
-```
-
-Inside that directory:
+Thread Keep stores local data in a generated, self-ignored directory at the
+worktree root:
 
 ```text
-thread-keep/
+.thread-keep/
+├── .gitignore                         # ignores this generated directory
 ├── index.sqlite                       # rebuildable local projection and working state
 └── objects/
     └── <context-snapshot-id>.json     # immutable committed context object
 ```
+
+On first use after upgrading from the legacy layout, Thread Keep copies
+`.git/thread-keep/` into `.thread-keep/` through a validated SQLite backup and
+leaves the legacy directory untouched. Do not alternate between an older client
+that writes the legacy directory and a newer client that writes `.thread-keep/`.
 
 Do not edit `index.sqlite` directly. If the projection is lost but the immutable
 objects remain, use `thread-keep rebuild <context-snapshot-id>` with an ID from

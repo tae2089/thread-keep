@@ -201,7 +201,7 @@ itself. Background it and send output to a log:
 ```bash
 #!/usr/bin/env sh
 # .git/hooks/post-commit — async, non-blocking index refresh
-( thread-keep --json update >> .git/thread-keep-update.log 2>&1 & )
+( thread-keep --json update >> .thread-keep/update.log 2>&1 & )
 exit 0
 ```
 

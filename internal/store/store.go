@@ -12,9 +12,10 @@ import (
 )
 
 type Layout struct {
-	Root      string
-	Database  string
-	ObjectDir string
+	Root       string
+	Database   string
+	ObjectDir  string
+	selfIgnore bool
 }
 
 type Store struct {
@@ -22,9 +23,8 @@ type Store struct {
 	layout Layout
 }
 
-func NewLayout(commonGitDir string) Layout {
-	root := filepath.Join(commonGitDir, "thread-keep")
-	return Layout{Root: root, Database: filepath.Join(root, "index.sqlite"), ObjectDir: filepath.Join(root, "objects")}
+func NewLayout(worktreeRoot string) Layout {
+	return newLayout(filepath.Join(worktreeRoot, ".thread-keep"), true)
 }
 
 func ValidateObjectChain(layout Layout, commitID, repositoryID, refName string) error {
@@ -33,6 +33,14 @@ func ValidateObjectChain(layout Layout, commitID, repositoryID, refName string) 
 }
 
 func Open(ctx context.Context, layout Layout) (*Store, error) {
+	if err := os.MkdirAll(layout.Root, 0o755); err != nil {
+		return nil, domain.NewError(domain.CodeLocalStorage, fmt.Errorf("create storage directory: %w", err))
+	}
+	if layout.selfIgnore {
+		if err := ensureSelfIgnored(layout.Root); err != nil {
+			return nil, domain.NewError(domain.CodeLocalStorage, fmt.Errorf("ignore storage directory: %w", err))
+		}
+	}
 	if err := os.MkdirAll(layout.ObjectDir, 0o755); err != nil {
 		return nil, domain.NewError(domain.CodeLocalStorage, fmt.Errorf("create object directory: %w", err))
 	}
@@ -51,3 +59,7 @@ func Open(ctx context.Context, layout Layout) (*Store, error) {
 }
 
 func (s *Store) Close() error { return s.db.Close() }
+
+func newLayout(root string, selfIgnore bool) Layout {
+	return Layout{Root: root, Database: filepath.Join(root, "index.sqlite"), ObjectDir: filepath.Join(root, "objects"), selfIgnore: selfIgnore}
+}

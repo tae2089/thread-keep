@@ -102,8 +102,9 @@ ok
 
 `init` is required before stateful local context commands such as `update`,
 `status`, and `note add`. Inspection/install commands such as `indexers list` and
-`pack install` do not require initialization. Local context is stored under
-`thread-keep/` inside the Git common directory—your source tree is untouched.
+`pack install` do not require initialization. Local context is stored under the
+self-ignored `.thread-keep/` directory at the worktree root. Thread Keep source
+annotations are not added and generated storage stays out of Git status.
 
 ### 2. Commit your source first, then index
 
@@ -255,26 +256,21 @@ The commands above are the normal verification path:
 - `context get` and `search` show active committed context; and
 - `log` shows immutable context history.
 
-To locate the files on disk, ask Git for the common directory used by this
-worktree:
-
-```bash
-git rev-parse --git-common-dir
-```
-
-After `thread-keep init`, that directory contains:
+After `thread-keep init`, the worktree root contains:
 
 ```text
-thread-keep/
+.thread-keep/
+├── .gitignore                      # ignores this generated directory
 ├── index.sqlite                    # rebuildable local projection and pending state
 └── objects/
     └── <context-snapshot-id>.json  # immutable committed object
 ```
 
-Linked worktrees share the immutable object directory but keep pending working
-sets separated by worktree identity. Do not edit SQLite directly. If the local
-projection is lost while committed objects remain, recover it with an explicit ID
-from `thread-keep log`:
+Each linked worktree has an independent local store. On first use after an
+upgrade, a legacy `.git/thread-keep/` store is copied into `.thread-keep/` and
+left untouched as a backup. Do not alternate old and new clients after this
+migration. Do not edit SQLite directly. If the local projection is lost while
+committed objects remain, recover it with an explicit ID from `thread-keep log`:
 
 ```bash
 thread-keep rebuild <context-snapshot-id>

@@ -55,6 +55,11 @@ test("container GoReleaser config defines three dual-platform GHCR images", asyn
 
 test("all released pack binaries report the release SemVer", async () => {
   const nativeConfig = await readFile(".goreleaser.yaml", "utf8");
+  assert.match(
+    nativeConfig,
+    /-X github\.com\/tae2089\/thread-keep\/internal\/mcpserver\.serverVersion=\{\{ envOrDefault "THREAD_KEEP_RELEASE_VERSION" \.Version \}\}/,
+    ".goreleaser.yaml must inject the tag-derived release version into thread-keep-mcp",
+  );
   assert.equal(
     (nativeConfig.match(/-X main\.indexerVersion=\{\{ envOrDefault "THREAD_KEEP_RELEASE_VERSION" \.Version \}\}/g) || []).length,
     PACK_BINARIES.length,
@@ -81,7 +86,7 @@ test("tag workflow publishes PyPI and containers after GitHub Release without np
   assert.match(workflow, /^  containers:$/m);
   assert.match(workflow, /^    needs: release$/m);
   assert.match(workflow, /^      packages: write$/m);
-  assert.match(workflow, /uses: docker\/login-action@v3/);
+  assert.match(workflow, /uses: docker\/login-action@[a-f0-9]{40}\s+# v3/);
   assert.match(workflow, /release --clean --config \.goreleaser\.docker\.yaml/);
   assert.doesNotMatch(
     workflow,
@@ -115,9 +120,42 @@ test("tag workflow publishes six pack projects before the PyPI core project", as
   assert.match(workflow, /^      name: pypi$/m);
   assert.match(workflow, /^      id-token: write$/m);
   assert.match(workflow, /node scripts\/release\/verify-pypi\.mjs/);
-  assert.match(workflow, /uses: pypa\/gh-action-pypi-publish@release\/v1/);
+  assert.match(workflow, /uses: pypa\/gh-action-pypi-publish@[a-f0-9]{40}\s+# release\/v1/);
   assert.match(workflow, /^          packages-dir: release\/wheels\/thread-keep\/$/m);
   assert.match(workflow, /^          skip-existing: true$/m);
+});
+
+test("release workflow pins every action to an immutable commit", async () => {
+  const workflow = await readFile(".github/workflows/release.yml", "utf8");
+  const actionReferences = [...workflow.matchAll(/^\s*-?\s*uses:\s+([^\s#]+)(?:\s+#\s*(\S+))?$/gm)];
+  assert.ok(actionReferences.length > 0, "release workflow must invoke actions");
+  for (const [, reference, humanTag] of actionReferences) {
+    assert.match(reference, /@[a-f0-9]{40}$/, `${reference} must use a full commit SHA`);
+    assert.ok(humanTag, `${reference} must retain its upstream tag as a review breadcrumb`);
+  }
+});
+
+test("container publication refuses to overwrite an existing SemVer tag", async () => {
+  const workflow = await readFile(".github/workflows/release.yml", "utf8");
+  const preflight = workflow.indexOf("node scripts/release/verify-ghcr.mjs");
+  const publish = workflow.indexOf("release --clean --config .goreleaser.docker.yaml");
+  assert.notEqual(preflight, -1, "container workflow must run the GHCR immutable-tag preflight");
+  assert.ok(preflight < publish, "GHCR immutable-tag preflight must run before publishing");
+  assert.match(workflow, /GHCR_TOKEN: \$\{\{ secrets\.GITHUB_TOKEN \}\}/);
+});
+
+test("installation docs state the actual wheel ABI and OS minimums", async () => {
+  for (const file of ["README.md", "docs/guides/quickstart.md", "docs/guides/releases.md"]) {
+    const contents = await readFile(file, "utf8");
+    assert.match(contents, /glibc 2\.39(?:\s+or\s+newer|\+)/i, `${file} must state the Linux wheel baseline`);
+    assert.match(contents, /macOS 15(?:\s+or\s+newer|\+)/i, `${file} must state the macOS wheel baseline`);
+  }
+});
+
+test("team-server deployment docs use the image writable storage path", async () => {
+  const guide = await readFile("docs/guides/team-server.md", "utf8");
+  assert.doesNotMatch(guide, /\/var\/lib\/thread-keep-server/);
+  assert.match(guide, /--storage \/var\/lib\/thread-keep/);
 });
 
 test("tag workflow excludes the macOS Intel native target", async () => {

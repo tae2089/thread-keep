@@ -20,8 +20,9 @@ python3 -m pip install thread-keep
 thread-keep --help
 ```
 
-Published wheels support Linux glibc x64/arm64, macOS Apple Silicon, and Windows
-x64. Add only the language packs your repository needs:
+Published wheels support Linux glibc 2.39 or newer on x64/arm64, macOS 15 or
+newer on Apple Silicon, and Windows x64. Add only the language packs your
+repository needs:
 
 ```bash
 python3 -m pip install "thread-keep[typescript,python]"

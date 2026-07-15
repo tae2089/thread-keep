@@ -29,6 +29,7 @@ builds:
       - sqlite_omit_load_extension
     ldflags:
       - -s -w
+      - -X github.com/tae2089/thread-keep/internal/mcpserver.serverVersion={{ envOrDefault "THREAD_KEEP_RELEASE_VERSION" .Version }}
 
   - id: thread-keep-server
     main: ./cmd/thread-keep-server

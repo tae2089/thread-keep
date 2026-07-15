@@ -71,7 +71,7 @@ single node is small:
 ```bash
 thread-keep-server \
   --listen 127.0.0.1:8320 \
-  --storage /var/lib/thread-keep-server \
+  --storage /var/lib/thread-keep \
   --config /etc/thread-keep-server/config.json
 # optional external ref database:
 #   --db-dsn postgres://user@host:5432/threadkeep
@@ -97,7 +97,7 @@ Wants=network-online.target
 [Service]
 ExecStart=/usr/local/bin/thread-keep-server \
   --listen 127.0.0.1:8320 \
-  --storage /var/lib/thread-keep-server \
+  --storage /var/lib/thread-keep \
   --config /etc/thread-keep-server/config.json
 Restart=on-failure
 # In cluster mode only, provide the peer secret out of band:
@@ -336,7 +336,7 @@ same storage):
 
 ```bash
 thread-keep-server --gc --gc-grace 336h \
-  --storage /var/lib/thread-keep-server \
+  --storage /var/lib/thread-keep \
   --config /etc/thread-keep-server/config.json
 ```
 

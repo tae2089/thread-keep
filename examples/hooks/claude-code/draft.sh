@@ -21,14 +21,17 @@
 command -v thread-keep >/dev/null 2>&1 || exit 0
 command -v claude >/dev/null 2>&1 || exit 0
 
-# Draft only from a clean, indexed working set: the draft workflow binds
-# notes to indexed entities, so a dirty or stale worktree would only produce
-# rejected notes.
+# `status` is diagnostic and succeeds for stale indexes. Require a readable,
+# clean Git worktree, then use `search` to exercise the working-set freshness
+# guard before the background agent is started.
+worktree_status="$(git status --porcelain 2>/dev/null)" || exit 0
+[ -z "$worktree_status" ] || exit 0
 thread-keep --json status >/dev/null 2>&1 || exit 0
+thread-keep --json search __thread_keep_freshness_probe__ >/dev/null 2>&1 || exit 0
 
 log="${TMPDIR:-/tmp}/thread-keep-draft.log"
 prompt='Follow the Thread Keep context draft workflow for this repository:
-1. Run `thread-keep --json status`; stop if the repository is not initialized or not indexed.
+1. Run `thread-keep --json status`; stop if the repository is not initialized, not indexed, dirty, or stale against Git HEAD.
 2. Inspect the most recent source change with `git log -1 --stat` and `git diff HEAD~1`.
 3. For each changed entity, run `thread-keep --json search <symbol>` and `thread-keep --json context get <entity-key>` to read what is already recorded.
 4. Add a pending note with `thread-keep --json note add <entity-key> --kind <intent|decision|constraint|example|warning> --body "..." --origin agent` ONLY where the diff, a test, or an issue supplies evidence. Prefer `note revise` when a note already covers the entity. Do not record change-logs.

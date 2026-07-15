@@ -24,8 +24,8 @@ automatically.
 
 ## Install
 
-Published releases support Python 3.9 or newer on Linux glibc x64/arm64, macOS
-Apple Silicon, and Windows x64:
+Published releases support Python 3.9 or newer on Linux glibc 2.39 or newer
+x64/arm64, macOS 15 or newer on Apple Silicon, and Windows x64:
 
 ```bash
 python3 -m pip install thread-keep

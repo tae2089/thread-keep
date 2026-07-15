@@ -17,7 +17,7 @@ Every script follows the project's hard rules for automation:
 | File | Hook point | What it does |
 | --- | --- | --- |
 | `claude-code/remind.sh` | Claude Code `Stop` | Prints a reminder when pending context drafts exist. Read-only. |
-| `claude-code/draft.sh` | Claude Code `SessionEnd` | Opt-in (`THREAD_KEEP_DRAFT_HEADLESS=1`): starts a background headless `claude -p` run that follows the context-draft workflow and adds evidence-backed pending notes with agent origin. |
+| `claude-code/draft.sh` | Claude Code `SessionEnd` | Opt-in (`THREAD_KEEP_DRAFT_HEADLESS=1`): after confirming a fresh indexed working set, starts a background headless `claude -p` run that follows the context-draft workflow and adds evidence-backed pending notes with agent origin. |
 | `claude-code/settings.json` | — | Hook wiring for the two scripts. |
 | `git/post-commit` | git `post-commit` | Refreshes the index (`thread-keep update`) asynchronously after each source commit. |
 

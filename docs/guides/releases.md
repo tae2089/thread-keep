@@ -22,6 +22,7 @@ Thread Keep uses GitHub Actions for CI and tag-driven releases. GoReleaser OSS b
 | `windows/amd64` | `win_amd64` | `windows-2025` |
 
 Windows arm64, Linux musl, and macOS Intel are not release targets. macOS Apple Silicon binaries are not code-signed or notarized in this workflow.
+The wheel tags require Linux glibc 2.39 or newer and macOS 15 or newer; pip rejects these wheels on older OS baselines before installation.
 
 GoReleaser also publishes three GHCR images as linux/amd64 and linux/arm64 manifests:
 
@@ -73,9 +74,9 @@ The workflow performs these gates in order:
 7. Verify any existing PyPI wheel filename and SHA-256, publish all six pack projects, then publish the core project only after every pack job succeeds.
 8. Independently cross-compile the container binaries for Linux amd64/arm64 and let GoReleaser `dockers_v2` publish the three GHCR manifests.
 
-A rerun accepts existing GitHub artifacts only when their full asset list and checksums exactly match the rebuilt output. PyPI recovery permits `skip-existing` only after every existing wheel digest matches the deterministic local rebuild. Partial matching publication can resume; any mismatch fails before upload.
+A rerun accepts existing GitHub artifacts only when their full asset list and checksums exactly match the rebuilt output. PyPI recovery permits `skip-existing` only after every existing wheel digest matches the deterministic local rebuild. Partial matching publication can resume; any mismatch fails before upload. GHCR release-version tags are immutable: the container job queries every package first and stops if the SemVer tag already exists, while `latest` advances only during a first successful publication of that version.
 
-Pack publication and container publication run independently after the GitHub Release job. Core PyPI publication waits for every pack project, while containers do not. If either path fails, the GitHub Release remains valid and no immutable artifact is rolled back. Inspect any already-published artifact before rerunning the failed job; the workflow never deletes registry state during recovery.
+Pack publication and container publication run independently after the GitHub Release job. Core PyPI publication waits for every pack project, while containers do not. If either path fails, the GitHub Release remains valid and no immutable artifact is rolled back. A container rerun is safe only when none of the three SemVer tags was published; if publication was partial, inspect the registry and recover manually rather than overwriting the completed tag. The workflow never deletes registry state during recovery.
 
 ## Artifact contract
 

@@ -82,12 +82,18 @@ def _validate_inputs(
                 raise ValueError(f"missing wheel artifact: {artifact.name}")
 
 
-def _core_metadata(packs: Sequence[Mapping[str, str]], repository: str, version: str) -> bytes:
+def _core_metadata(
+    description: str,
+    packs: Sequence[Mapping[str, str]],
+    repository: str,
+    version: str,
+) -> bytes:
     lines = [
         "Metadata-Version: 2.3\n"
         "Name: thread-keep\n"
         f"Version: {version}\n"
         "Summary: Versioned local code context for humans and coding agents\n"
+        "Description-Content-Type: text/markdown\n"
         "License: MIT\n"
         "Requires-Python: >=3.9\n"
         f"Project-URL: Repository, https://github.com/{repository}\n"
@@ -102,7 +108,17 @@ def _core_metadata(packs: Sequence[Mapping[str, str]], repository: str, version:
         distribution = f"thread-keep-pack-{pack['language']}"
         lines.append(f'Requires-Dist: {distribution}=={version}; extra == "all"\n')
     lines.append("\n")
+    lines.append(description)
     return "".join(lines).encode()
+
+
+def _read_description(path: Path) -> str:
+    if not path.is_file():
+        raise ValueError("wheel README file is missing")
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as error:
+        raise ValueError(f"read wheel README: {error}") from error
 
 
 def _pack_metadata(language: str, repository: str, version: str) -> bytes:
@@ -156,6 +172,7 @@ def _write_wheel(path: Path, files: dict[str, bytes], executable_paths: set[str]
 def _build_core_wheel(
     artifacts_dir: Path,
     config: Mapping,
+    description: str,
     license_file: Path,
     output_dir: Path,
     repository: str,
@@ -168,7 +185,7 @@ def _build_core_wheel(
         "thread_keep/__init__.py": f'__version__ = "{version}"\n'.encode(),
         "thread_keep/launcher.py": (template_dir / "launcher.py").read_bytes(),
         f"{dist_info}/LICENSE": license_file.read_bytes(),
-        f"{dist_info}/METADATA": _core_metadata(config["packs"], repository, version),
+        f"{dist_info}/METADATA": _core_metadata(description, config["packs"], repository, version),
         f"{dist_info}/WHEEL": _wheel_metadata(target["wheelTag"]),
         f"{dist_info}/entry_points.txt": (
             "[console_scripts]\n"
@@ -249,17 +266,29 @@ def build_wheels(
     config_file: Path,
     license_file: Path,
     output_dir: Path,
+    readme_file: Path,
     repository: str,
     template_dir: Path,
     version: str,
 ) -> list[Path]:
     config = _load_config(config_file)
     _validate_inputs(artifacts_dir, config, license_file, repository, template_dir, version)
+    description = _read_description(readme_file)
     output_dir.parent.mkdir(parents=True, exist_ok=True)
     staged = Path(tempfile.mkdtemp(prefix=f".{output_dir.name}-", dir=output_dir.parent))
     try:
         for target in config["targets"]:
-            _build_core_wheel(artifacts_dir, config, license_file, staged, repository, target, template_dir, version)
+            _build_core_wheel(
+                artifacts_dir,
+                config,
+                description,
+                license_file,
+                staged,
+                repository,
+                target,
+                template_dir,
+                version,
+            )
             for pack in config["packs"]:
                 _build_pack_wheel(artifacts_dir, license_file, staged, pack, repository, target, version)
         _replace_directory(staged, output_dir)
@@ -275,6 +304,7 @@ def _arguments(arguments: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--license", dest="license_file", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--readme", dest="readme_file", type=Path, required=True)
     parser.add_argument("--repository", required=True)
     parser.add_argument("--template", type=Path, required=True)
     parser.add_argument("--version", required=True)
@@ -288,6 +318,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
         config_file=values.config,
         license_file=values.license_file,
         output_dir=values.out,
+        readme_file=values.readme_file,
         repository=values.repository,
         template_dir=values.template,
         version=values.version,

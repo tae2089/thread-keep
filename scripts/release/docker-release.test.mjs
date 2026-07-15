@@ -91,6 +91,7 @@ test("native release builds do not embed a manifest verification key", async () 
 test("tag workflow publishes six pack projects before the PyPI core project", async () => {
   const workflow = await readFile(".github/workflows/release.yml", "utf8");
   assert.match(workflow, /python3 scripts\/release\/build_wheels\.py/);
+  assert.match(workflow, /--readme=README\.md/);
   assert.match(workflow, /name: pypi-wheels/);
   assert.match(workflow, /find release\/wheels -mindepth 2 -maxdepth 2 -name '\*\.whl'.*"28"/);
   assert.match(workflow, /^  pypi-packs:$/m);

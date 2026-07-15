@@ -1,5 +1,6 @@
 import base64
 import csv
+from email.parser import BytesParser
 import hashlib
 import io
 import json
@@ -26,6 +27,8 @@ class BuildWheelsTest(unittest.TestCase):
         self.artifacts.mkdir()
         self.license_file = self.root / "LICENSE"
         self.license_file.write_text("test license\n", encoding="utf-8")
+        self.readme_file = self.root / "README.md"
+        self.readme_file.write_text("# Thread Keep\n\nVersioned project description.\n", encoding="utf-8")
         self.template_dir = self.root / "template"
         self.template_dir.mkdir()
         (self.template_dir / "launcher.py").write_text(
@@ -50,6 +53,7 @@ class BuildWheelsTest(unittest.TestCase):
             config_file=CONFIG_FILE,
             license_file=self.license_file,
             output_dir=output,
+            readme_file=self.readme_file,
             repository="tae2089/thread-keep",
             template_dir=self.template_dir,
             version=version,
@@ -82,6 +86,16 @@ class BuildWheelsTest(unittest.TestCase):
         output = self.root / "wheels"
 
         with self.assertRaisesRegex(ValueError, "wheel license file is missing"):
+            self.build(output)
+
+        self.assertFalse(output.exists())
+
+    def test_rejects_missing_readme_without_writing_output(self) -> None:
+        self.seed_artifacts()
+        self.readme_file.unlink()
+        output = self.root / "wheels"
+
+        with self.assertRaisesRegex(ValueError, "wheel README file is missing"):
             self.build(output)
 
         self.assertFalse(output.exists())
@@ -184,6 +198,30 @@ class BuildWheelsTest(unittest.TestCase):
             self.assertIn(f"Name: thread-keep-pack-{pack['language']}\n", metadata)
             self.assertIn("Version: 1.2.3\n", metadata)
             self.assertEqual(archive.getinfo(executable).external_attr >> 16 & 0o777, 0o755)
+
+    def test_core_wheel_metadata_includes_markdown_project_description(self) -> None:
+        self.seed_artifacts()
+        wheels = build_wheels(
+            artifacts_dir=self.artifacts,
+            config_file=CONFIG_FILE,
+            license_file=self.license_file,
+            output_dir=self.root / "wheels",
+            readme_file=self.readme_file,
+            repository="tae2089/thread-keep",
+            template_dir=self.template_dir,
+            version="1.2.3",
+        )
+        wheel = next(
+            path
+            for path in wheels
+            if path.parent.name == "thread-keep" and "manylinux_2_39_x86_64" in path.name
+        )
+
+        with zipfile.ZipFile(wheel) as archive:
+            metadata = BytesParser().parsebytes(archive.read("thread_keep-1.2.3.dist-info/METADATA"))
+
+        self.assertEqual(metadata["Description-Content-Type"], "text/markdown")
+        self.assertEqual(metadata.get_payload(), "# Thread Keep\n\nVersioned project description.\n")
 
     def test_pip_install_preserves_packaged_executable_modes(self) -> None:
         self.seed_artifacts()

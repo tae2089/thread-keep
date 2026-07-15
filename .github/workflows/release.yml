@@ -184,6 +184,7 @@ jobs:
           --config=scripts/release/release-config.json
           --license=LICENSE
           --out=release/wheels
+          --readme=README.md
           --repository=${{ github.repository }}
           --template=pypi/thread_keep
           --version=${{ steps.release.outputs.version }}

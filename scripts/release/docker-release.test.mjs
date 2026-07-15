@@ -54,14 +54,22 @@ test("container GoReleaser config defines three dual-platform GHCR images", asyn
 });
 
 test("all released pack binaries report the release SemVer", async () => {
-  for (const file of [".goreleaser.yaml", ".goreleaser.docker.yaml"]) {
-    const config = await readFile(file, "utf8");
-    assert.equal(
-      (config.match(/-X main\.indexerVersion=\{\{ \.Version \}\}/g) || []).length,
-      PACK_BINARIES.length,
-      `${file} must inject the version into every pack binary`,
-    );
-  }
+  const nativeConfig = await readFile(".goreleaser.yaml", "utf8");
+  assert.equal(
+    (nativeConfig.match(/-X main\.indexerVersion=\{\{ envOrDefault "THREAD_KEEP_RELEASE_VERSION" \.Version \}\}/g) || []).length,
+    PACK_BINARIES.length,
+    ".goreleaser.yaml must prefer the tag-derived release version for every snapshot-built pack binary",
+  );
+
+  const containerConfig = await readFile(".goreleaser.docker.yaml", "utf8");
+  assert.equal(
+    (containerConfig.match(/-X main\.indexerVersion=\{\{ \.Version \}\}/g) || []).length,
+    PACK_BINARIES.length,
+    ".goreleaser.docker.yaml must inject its non-snapshot release version into every pack binary",
+  );
+
+  const workflow = await readFile(".github/workflows/release.yml", "utf8");
+  assert.match(workflow, /echo "THREAD_KEEP_RELEASE_VERSION=\$\{GITHUB_REF_NAME#v\}" >> "\$GITHUB_ENV"/);
 });
 
 test("tag workflow publishes PyPI and containers after GitHub Release without npm", async () => {

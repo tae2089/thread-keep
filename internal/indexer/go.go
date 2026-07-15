@@ -112,8 +112,21 @@ func (Go) IndexFiles(ctx context.Context, root, sourceSHA string, files []string
 			}
 		}
 	}
+	disambiguateDuplicateEntityKeys(entities)
 	sort.Slice(entities, func(i, j int) bool { return entities[i].Key < entities[j].Key })
 	return entities, nil
+}
+
+func disambiguateDuplicateEntityKeys(entities []domain.Entity) {
+	counts := make(map[string]int, len(entities))
+	for _, entity := range entities {
+		counts[entity.Key]++
+	}
+	for index := range entities {
+		if counts[entities[index].Key] > 1 {
+			entities[index].Key += "@" + entities[index].Path
+		}
+	}
 }
 
 func repositoryFile(root, resolvedRoot, relative string) (string, error) {

@@ -16,6 +16,32 @@ type fixedIndexer struct {
 	err        error
 }
 
+func TestCoordinatorIndexesSameGoSymbolAcrossPlatformFiles(t *testing.T) {
+	root := t.TempDir()
+	writeIndexSource(t, root, "lock_linux.go", "//go:build linux\n\npackage sample\nfunc tryLock() {}\n")
+	writeIndexSource(t, root, "lock_windows.go", "//go:build windows\n\npackage sample\nfunc tryLock() {}\n")
+
+	projections, err := NewCoordinator().Index(context.Background(), root, "sha")
+	if err != nil {
+		t.Fatalf("Index() error = %v", err)
+	}
+	if len(projections) != 1 || projections[0].Coverage.State != domain.CoverageIndexed {
+		t.Fatalf("Index() projections = %#v, want indexed Go coverage", projections)
+	}
+	wantKeys := map[string]string{
+		"lock_linux.go":   "sample.tryLock@lock_linux.go",
+		"lock_windows.go": "sample.tryLock@lock_windows.go",
+	}
+	if len(projections[0].Entities) != len(wantKeys) {
+		t.Fatalf("Index() entities = %#v, want %d platform variants", projections[0].Entities, len(wantKeys))
+	}
+	for _, entity := range projections[0].Entities {
+		if entity.Key != wantKeys[entity.Path] {
+			t.Fatalf("Index() entity %q key = %q, want %q", entity.Path, entity.Key, wantKeys[entity.Path])
+		}
+	}
+}
+
 func TestGoIndexerUsesOnlyRequestedFiles(t *testing.T) {
 	root := t.TempDir()
 	writeIndexSource(t, root, "included.go", "package sample\nfunc Included() {}\n")
@@ -25,7 +51,7 @@ func TestGoIndexerUsesOnlyRequestedFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Index() error = %v", err)
 	}
-	if len(result.Entities) != 1 || result.Entities[0].Name != "Included" {
+	if len(result.Entities) != 1 || result.Entities[0].Name != "Included" || result.Entities[0].Key != "sample.Included" {
 		t.Fatalf("Index() entities = %#v, want only Included", result.Entities)
 	}
 }

@@ -79,7 +79,7 @@ builds:
       - -trimpath
     ldflags:
       - -s -w
-      - -X main.indexerVersion={{ .Version }}
+      - -X main.indexerVersion={{ envOrDefault "THREAD_KEEP_RELEASE_VERSION" .Version }}
 
   - id: thread-keep-index-javascript
     dir: packs/javascript
@@ -91,7 +91,7 @@ builds:
       - -trimpath
     ldflags:
       - -s -w
-      - -X main.indexerVersion={{ .Version }}
+      - -X main.indexerVersion={{ envOrDefault "THREAD_KEEP_RELEASE_VERSION" .Version }}
 
   - id: thread-keep-index-python
     dir: packs/python
@@ -103,7 +103,7 @@ builds:
       - -trimpath
     ldflags:
       - -s -w
-      - -X main.indexerVersion={{ .Version }}
+      - -X main.indexerVersion={{ envOrDefault "THREAD_KEEP_RELEASE_VERSION" .Version }}
 
   - id: thread-keep-index-java
     dir: packs/java
@@ -115,7 +115,7 @@ builds:
       - -trimpath
     ldflags:
       - -s -w
-      - -X main.indexerVersion={{ .Version }}
+      - -X main.indexerVersion={{ envOrDefault "THREAD_KEEP_RELEASE_VERSION" .Version }}
 
   - id: thread-keep-index-kotlin
     dir: packs/kotlin
@@ -127,7 +127,7 @@ builds:
       - -trimpath
     ldflags:
       - -s -w
-      - -X main.indexerVersion={{ .Version }}
+      - -X main.indexerVersion={{ envOrDefault "THREAD_KEEP_RELEASE_VERSION" .Version }}
 
   - id: thread-keep-index-rust
     dir: packs/rust
@@ -139,7 +139,7 @@ builds:
       - -trimpath
     ldflags:
       - -s -w
-      - -X main.indexerVersion={{ .Version }}
+      - -X main.indexerVersion={{ envOrDefault "THREAD_KEEP_RELEASE_VERSION" .Version }}
 
 release:
   disable: true

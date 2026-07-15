@@ -5,6 +5,7 @@ Follow the global prompt rules first. This file only adds project-specific skill
 ## Skill Routing
 
 - When writing, modifying, or reviewing code, apply `coding-quality-guardrails` as the quality gate.
+- Use the read-only `overengineering-review` skill before adding another branch after one new abstraction causes three follow-up regressions, or after tests are green and before committing a change that adds a persisted field, interface method, lifecycle state, compatibility branch, destructive-operation safeguard, or more than twice as much test code as production code; edit only when the user explicitly requests simplification.
 - When debugging bugs, regressions, flaky behavior, or failing tests, use `diagnosing-bugs` before changing behavior.
 - Before implementing new logic with branching, side effects, resource lifecycles, or ordering constraints, use `flow-design` and keep the design note in the task workspace.
 - When designing module boundaries, refactoring, or shaping interfaces, use `codebase-design`.
